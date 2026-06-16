@@ -34,6 +34,8 @@ function format(e: PipelineEvent): string {
       return `[done]  ${e.stage} w${e.worker} ${e.itemId}`;
     case "item.reworked":
       return `[rework] ${e.itemId} attempt ${e.attempt}`;
+    case "item.gate":
+      return `[gate]  ${e.itemId} ${e.gate} ${e.passed ? "ok" : "FAIL"}${e.detail ? ` — ${firstLine(e.detail)}` : ""}`;
     case "item.failed":
       return `[fail]  ${e.stage} ${e.itemId}: ${firstLine(e.error)}`;
     case "item.metrics":

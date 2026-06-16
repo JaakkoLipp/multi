@@ -145,6 +145,15 @@ stub agents with **real** Vitest execution, including the dev↔tester rework lo
 - **One structured-output repair.** If an LLM stage returns a value that fails
   its Zod schema, the agent is re-asked exactly once with the validation errors
   appended before the item is failed (`agents/mastra.ts`).
+- **Quality gates.** After unit tests pass, optional gates run on the generated
+  module: strict `tsc --noEmit` (typecheck), ESLint (lint), and a Vitest line-
+  coverage threshold. A failing gate routes the item back to the developer with
+  the gate output as feedback. Enable with `--gates` or `GATE_*` env vars; each
+  is surfaced as an `item.gate` event. Off by default.
+- **Dependency-aware scheduling (DAG).** The orchestrator can express
+  dependencies between work items; the engine validates acyclicity and schedules
+  topologically — dependents wait (`item.blocked`) until their dependencies pass
+  (`item.unblocked`), and are cascade-failed if a dependency cannot pass.
 - **Per-stage metrics.** Each stage emits an `item.metrics` event; `summarize()`
   folds the stream into pass rate, rework count, and per-stage timing.
 

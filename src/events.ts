@@ -21,6 +21,13 @@ export type PipelineEvent =
   | { type: "item.started"; stage: Stage; itemId: string; worker: number }
   | { type: "item.completed"; stage: Stage; itemId: string; worker: number }
   | { type: "item.reworked"; itemId: string; attempt: number; feedback: string }
+  | {
+      type: "item.gate";
+      itemId: string;
+      gate: "tests" | "typecheck" | "lint" | "coverage";
+      passed: boolean;
+      detail: string;
+    }
   | { type: "item.failed"; itemId: string; stage: Stage; error: string }
   | { type: "item.metrics"; stage: Stage; itemId: string; attempt: number; durationMs: number }
   | { type: "item.finalized"; record: FinalRecord }

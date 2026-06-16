@@ -35,11 +35,26 @@ const ConfigSchema = z.object({
     developer: intFromEnv(2),
     tester: intFromEnv(2),
   }),
+  gates: z.object({
+    // Quality gates run after unit tests pass; a failing gate routes the item
+    // back to the developer as feedback (bounded by the rework cap). Default off
+    // to keep the fast path fast; enable per gate via env or the CLI --gates flag.
+    typecheck: z.boolean(),
+    lint: z.boolean(),
+    coverage: z.boolean(),
+    coverageMin: z.number().min(0).max(100),
+  }),
 });
 
 export type PipelineConfig = z.infer<typeof ConfigSchema>;
 
 export type RawEnv = Record<string, string | undefined>;
+
+/** Parse a boolean-ish env var ("1"/"true"/"yes"/"on" => true). */
+function boolFromEnv(value: string | undefined, def: boolean): boolean {
+  if (value === undefined || value === "") return def;
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
 
 export function loadConfig(env: RawEnv = process.env): PipelineConfig {
   const parsed = ConfigSchema.safeParse({
@@ -58,6 +73,12 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
       designer: env.DESIGNER_CONCURRENCY,
       developer: env.DEVELOPER_CONCURRENCY,
       tester: env.TESTER_CONCURRENCY,
+    },
+    gates: {
+      typecheck: boolFromEnv(env.GATE_TYPECHECK, false),
+      lint: boolFromEnv(env.GATE_LINT, false),
+      coverage: boolFromEnv(env.GATE_COVERAGE, false),
+      coverageMin: env.COVERAGE_MIN === undefined || env.COVERAGE_MIN === "" ? 80 : Number(env.COVERAGE_MIN),
     },
   });
 

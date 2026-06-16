@@ -18,7 +18,7 @@
  * Headless: emits no output, imports nothing from `vscode` or any renderer.
  */
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -89,6 +89,8 @@ export interface SandboxRun {
   passed: boolean;
   stdout: string;
   stderr: string;
+  /** Line-coverage percentage of the module under test, when coverage was collected. */
+  coveragePct: number | null;
 }
 
 export interface RunTestsArgs {
@@ -99,10 +101,12 @@ export interface RunTestsArgs {
   timeoutMs: number;
   /** Abort the child process early (used by the engine's cancellation path). */
   signal?: AbortSignal;
+  /** Instrument the run and report line coverage of the module (coverage gate). */
+  collectCoverage?: boolean;
 }
 
 export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
-  const { dir, sourceCode, testSource, timeoutMs, signal } = args;
+  const { dir, sourceCode, testSource, timeoutMs, signal, collectCoverage } = args;
 
   // Defense-in-depth: reject model-generated source that pulls in external
   // modules before writing files or spawning vitest. The engine treats this as
@@ -114,6 +118,7 @@ export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
       passed: false,
       stdout: "",
       stderr: `[sandbox] disallowed imports in generated module: ${disallowed.join(", ")}`,
+      coveragePct: null,
     };
   }
 
@@ -123,12 +128,15 @@ export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
   await writeFile(path.join(dir, TEST_FILE), testSource, "utf8");
   // A self-contained vitest config so the child never inherits the project's
   // own test config (which would otherwise try to run the whole suite).
+  const coverageBlock = collectCoverage
+    ? `, coverage: { enabled: true, provider: "v8", reporter: ["json-summary"], reportsDirectory: "coverage", include: ["${SOURCE_FILE}"], all: false }`
+    : "";
   await writeFile(
     path.join(dir, "vitest.config.ts"),
     [
       `import { defineConfig } from "vitest/config";`,
       `export default defineConfig({`,
-      `  test: { include: ["${TEST_FILE}"], watch: false, environment: "node" },`,
+      `  test: { include: ["${TEST_FILE}"], watch: false, environment: "node"${coverageBlock} },`,
       `});`,
       "",
     ].join("\n"),
@@ -147,19 +155,75 @@ export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
         env: { ...process.env, CI: "true", FORCE_COLOR: "0" },
         signal,
       },
-      (error, stdout, stderr) => {
+      async (error, stdout, stderr) => {
         const killed = Boolean(
           error && (error as NodeJS.ErrnoException & { killed?: boolean }).killed,
         );
         const aborted = Boolean(signal?.aborted);
         const reason = aborted ? "cancelled" : killed ? `killed after ${timeoutMs}ms timeout` : "";
+        const coveragePct = collectCoverage && !error ? await readCoverage(dir) : null;
         resolve({
           dir,
           passed: !error,
           stdout: stdout ?? "",
           stderr: (stderr ?? "") + (reason ? `\n[sandbox] ${reason}` : ""),
+          coveragePct,
         });
       },
     );
   });
+}
+
+async function readCoverage(dir: string): Promise<number | null> {
+  try {
+    const raw = await readFile(path.join(dir, "coverage", "coverage-summary.json"), "utf8");
+    const summary = JSON.parse(raw) as { total?: { lines?: { pct?: number } } };
+    const pct = summary.total?.lines?.pct;
+    return typeof pct === "number" ? pct : null;
+  } catch {
+    return null;
+  }
+}
+
+// --- Quality gates (run after unit tests pass) -------------------------------
+
+export interface GateResult {
+  ok: boolean;
+  output: string;
+}
+
+const tscBin = path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+const eslintBin = path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "eslint.cmd" : "eslint");
+const eslintConfig = path.join(projectRoot, "eslint.config.mjs");
+
+function runBin(bin: string, bargs: string[], cwd: string, timeoutMs: number): Promise<GateResult> {
+  return new Promise((resolve) => {
+    execFile(
+      bin,
+      bargs,
+      { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, FORCE_COLOR: "0" } },
+      (error, stdout, stderr) => {
+        resolve({ ok: !error, output: `${stdout ?? ""}${stderr ?? ""}`.trim() });
+      },
+    );
+  });
+}
+
+/** Type-check the generated module with a strict, standalone tsc invocation. */
+export function typecheckModule(dir: string, timeoutMs: number): Promise<GateResult> {
+  return runBin(
+    tscBin,
+    [
+      "--noEmit", "--strict", "--skipLibCheck",
+      "--target", "ES2022", "--module", "ESNext", "--moduleResolution", "Bundler",
+      SOURCE_FILE,
+    ],
+    dir,
+    timeoutMs,
+  );
+}
+
+/** Lint the generated module against the project's flat ESLint config. */
+export function lintModule(dir: string, timeoutMs: number): Promise<GateResult> {
+  return runBin(eslintBin, ["--config", eslintConfig, SOURCE_FILE], dir, timeoutMs);
 }

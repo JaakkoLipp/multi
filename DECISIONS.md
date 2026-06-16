@@ -137,6 +137,25 @@ Added after the MVP met all acceptance criteria, staying within §11's guardrail
 - **One structured-output repair.** `generateStructured` re-asks once with the Zod
   errors appended on a parse failure — exactly the single repair §11 leaves in scope.
 
+## SDLC capability extensions (lead-directed)
+
+Built after the hardening sweep, on explicit direction to deepen the pipeline's
+software-development capability. Each kept the headless-engine/serializable-event
+design and is fully tested against deterministic stubs.
+
+- **Dependency-aware WBS (DAG).** Items carry `dependsOn`; the orchestrator
+  expresses edges by `key` and the engine resolves them to ids, rejects cycles
+  (Kahn) up front, and schedules topologically via the existing finalize()/latch
+  machinery — no second scheduler. Real cross-module *imports* stay out (they'd
+  break the per-item sandbox + import allowlist); dependencies operate at the
+  scheduling + design-context level, with the integration stage assembling
+  modules for real later.
+- **Quality gates (typecheck + lint + coverage).** Run after unit tests pass and
+  reuse the rework edge for failures. Typecheck = standalone strict `tsc` on the
+  module; lint = a parser-only ESLint flat config (fast, no type-aware project);
+  coverage = vitest v8 `json-summary` parsed for line %. Gated behind config so
+  the default fast path and the test suite stay quick; `--gates` enables them.
+
 ## Out of scope (per §11)
 
 No VS Code extension/webview, persistence, distributed queues, auth, HITL, or

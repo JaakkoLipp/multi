@@ -89,6 +89,9 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
     case "item.metrics":
       state.busyMs += e.durationMs;
       break;
+    case "item.gate":
+      if (!e.passed) note(state, `${e.itemId} gate ${pc.yellow(e.gate)} failed`);
+      break;
     case "pipeline.cancelled":
       state.cancelled = true;
       note(state, pc.yellow(`cancelled: ${e.reason}`));

@@ -34,6 +34,7 @@ interface Cli {
   port: number;
   speed: number;
   json: boolean;
+  gates: string | null;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -46,6 +47,7 @@ function parseArgs(argv: string[]): Cli {
   let replayFile: string | null = null;
   let port = 7717;
   let speed = 120;
+  let gates: string | null = null;
 
   const valueOf = (arg: string, i: number): { value: string | null; next: number } => {
     const eq = arg.indexOf("=");
@@ -91,13 +93,19 @@ function parseArgs(argv: string[]): Cli {
         i = next;
         break;
       }
+      case "--gates": {
+        const { value, next } = valueOf(arg, i);
+        gates = value ?? "typecheck,lint,coverage";
+        i = next;
+        break;
+      }
       default: break;
     }
   }
 
   return {
     prompt: positionals.join(" ").trim(),
-    noUi, stub, serve, record, replayFile, port, speed, json,
+    noUi, stub, serve, record, replayFile, port, speed, json, gates,
   };
 }
 
@@ -120,6 +128,7 @@ function usage(): never {
       `  --record [file] persist the event stream as NDJSON (default workspace/events.ndjson)\n` +
       `  --serve         broadcast the stream over SSE; open the printed URL to watch in a browser\n` +
       `  --json          machine-readable {summary, records} to stdout (implies --no-ui)\n` +
+      `  --gates [list]  quality gates after tests (default typecheck,lint,coverage)\n` +
       `  --replay <file> re-draw a recorded run with NO engine (proves the renderer seam)`,
   );
   process.exit(2);
@@ -144,6 +153,12 @@ async function main(): Promise<void> {
 
   loadDotEnv();
   const config = loadConfig(process.env);
+  if (cli.gates !== null) {
+    const set = new Set(cli.gates.split(",").map((s) => s.trim()).filter(Boolean));
+    config.gates.typecheck = set.has("typecheck");
+    config.gates.lint = set.has("lint");
+    config.gates.coverage = set.has("coverage");
+  }
   const workspaceDir = path.resolve("workspace");
 
   let agents: Agents;

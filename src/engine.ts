@@ -22,7 +22,14 @@ import {
 } from "./contracts.js";
 import { EventBus, type EventListener, type PipelineEvent } from "./events.js";
 import { AsyncQueue, CompletionLatch, WorkerPool } from "./queue.js";
-import { runTests, SOURCE_FILE, SOURCE_IMPORT, TEST_FILE } from "./sandbox.js";
+import {
+  lintModule,
+  runTests,
+  SOURCE_FILE,
+  SOURCE_IMPORT,
+  TEST_FILE,
+  typecheckModule,
+} from "./sandbox.js";
 import type { Agents } from "./agents/types.js";
 
 export interface CreatePipelineOptions {
@@ -234,6 +241,37 @@ async function runPipeline(
     }
   };
 
+  // Quality gates run after unit tests pass. Each enabled gate is executed and
+  // surfaced as an item.gate event; the aggregated feedback (null if all pass)
+  // is routed back to the developer via the normal rework edge.
+  const runQualityGates = async (
+    itemId: string,
+    attemptDir: string,
+    testRun: { coveragePct: number | null },
+  ): Promise<string | null> => {
+    const failures: string[] = [];
+    const record = (gate: "typecheck" | "lint" | "coverage", passed: boolean, detail: string) =>
+      emit({ type: "item.gate", itemId, gate, passed, detail });
+
+    if (config.gates.typecheck) {
+      const g = await typecheckModule(attemptDir, config.testTimeoutMs);
+      record("typecheck", g.ok, g.ok ? "" : firstLines(g.output));
+      if (!g.ok) failures.push(`Type check failed:\n${g.output}`);
+    }
+    if (config.gates.lint) {
+      const g = await lintModule(attemptDir, config.testTimeoutMs);
+      record("lint", g.ok, g.ok ? "" : firstLines(g.output));
+      if (!g.ok) failures.push(`Lint failed:\n${g.output}`);
+    }
+    if (config.gates.coverage) {
+      const pct = testRun.coveragePct;
+      const ok = pct !== null && pct >= config.gates.coverageMin;
+      record("coverage", ok, `${pct ?? "unknown"}% (min ${config.gates.coverageMin}%)`);
+      if (!ok) failures.push(`Coverage ${pct ?? "unknown"}% is below the ${config.gates.coverageMin}% threshold; add tests.`);
+    }
+    return failures.length > 0 ? failures.join("\n\n") : null;
+  };
+
   // --- Designer stage -------------------------------------------------------
   const designerPool = new WorkerPool<WorkItem>(
     designerQueue,
@@ -311,7 +349,7 @@ async function runPipeline(
       emit({ type: "item.started", stage: "tester", itemId: item.id, worker });
       try {
         const s = states.get(item.id)!;
-        const { testSource, result } = await timed("tester", item.id, code.attempt, async () => {
+        const { testSource, result, failure } = await timed("tester", item.id, code.attempt, async () => {
           const authored = await agents.writeTests({
             spec,
             functionName: code.functionName,
@@ -326,13 +364,20 @@ async function runPipeline(
             testSource: authored.testSource,
             timeoutMs: config.testTimeoutMs,
             signal,
+            collectCoverage: config.gates.coverage,
           });
-          return { testSource: authored.testSource, result: run };
+
+          // Unit tests are the first gate. Only if they pass do we run the rest.
+          emit({ type: "item.gate", itemId: item.id, gate: "tests", passed: run.passed, detail: run.passed ? "" : firstLines(run.stderr || run.stdout) });
+          let failure: string | null = run.passed ? null : formatFeedback(run.stdout, run.stderr);
+          if (run.passed) failure = await runQualityGates(item.id, attemptDir, run);
+          return { testSource: authored.testSource, result: run, failure };
         });
         void testSource;
+        void result;
         if (cancelled) return;
 
-        if (result.passed) {
+        if (failure === null) {
           s.passed = true;
           emit({ type: "item.completed", stage: "tester", itemId: item.id, worker });
           await writeOutput(outputDir, item, code.functionName, code.sourceCode, testSource);
@@ -340,8 +385,8 @@ async function runPipeline(
           return;
         }
 
-        // Failed. Rework if we still have attempts left, else sink as failed.
-        const feedback = formatFeedback(result.stdout, result.stderr);
+        // Tests or a quality gate failed. Rework if attempts remain, else sink.
+        const feedback = failure;
         s.lastError = feedback;
         if (code.attempt <= config.maxReworkAttempts) {
           const nextAttempt = code.attempt + 1;
@@ -457,4 +502,13 @@ function formatFeedback(stdout: string, stderr: string): string {
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/** First few non-empty lines of gate output, for a compact event detail. */
+function firstLines(text: string, n = 6): string {
+  return text
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+    .slice(0, n)
+    .join("\n");
 }
