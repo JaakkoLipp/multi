@@ -18,6 +18,8 @@ export function attachLogRenderer(
 
 function format(e: PipelineEvent): string {
   switch (e.type) {
+    case "pipeline.started":
+      return `[pipeline] started ${e.runId} — "${e.prompt}"`;
     case "wbs.created":
       return `[wbs] created ${e.items.length} items: ${e.items.map((i) => i.id).join(", ")}`;
     case "item.enqueued":

@@ -31,6 +31,7 @@ const sampleRecord: FinalRecord = {
 };
 
 const samples: Record<PipelineEventType, PipelineEvent> = {
+  "pipeline.started": { type: "pipeline.started", runId: "2026-06-16", prompt: "string utils", startedAt: 1750000000000 },
   "wbs.created": { type: "wbs.created", items: [sampleItem] },
   "item.enqueued": { type: "item.enqueued", stage: "designer", itemId: "wi-001", queueDepth: 3 },
   "item.started": { type: "item.started", stage: "developer", itemId: "wi-001", worker: 0 },
@@ -61,6 +62,7 @@ describe("PipelineEvent serialization", () => {
 
   it("covers the whole union (no variant forgotten)", () => {
     const expected: PipelineEventType[] = [
+      "pipeline.started",
       "wbs.created",
       "item.enqueued",
       "item.started",

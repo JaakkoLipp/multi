@@ -116,6 +116,27 @@ in-place redraw of three stage rows; `log-update` redraws a frame string on a
 timer with no framework. Lighter, and it keeps the renderer a trivial
 event→string reducer — which is exactly the shape the phase-2 webview will reuse.
 
+## Post-MVP hardening (in-scope extensions)
+
+Added after the MVP met all acceptance criteria, staying within §11's guardrails
+(no extension/persistence-DB/distributed-queue/auth/HITL/extra-roles):
+
+- **Cooperative cancellation.** `run(prompt, { signal })` threads an `AbortSignal`
+  into the sandbox (killing the vitest child) and finalizes pending items as
+  cancelled, so the run resolves rather than hangs. New `pipeline.cancelled`
+  event; CLI binds `Ctrl-C`. Chosen over hard `process.exit` so a renderer/webview
+  still receives a clean terminal state.
+- **Observability.** `item.metrics` (per-stage `durationMs`) and `pipeline.started`
+  (runId/prompt/timestamp) events feed `metrics.ts::summarize()`, a pure fold to a
+  `RunSummary` used by the terminal block, `--json`, and `workspace/output/summary.json`.
+  Kept in the event stream (not side-channel logging) so every transport — replay,
+  SSE, future webview — gets it for free.
+- **Sandbox import allowlist.** `findDisallowedImports()` rejects non-self-contained
+  generated source before execution (defense-in-depth for the "executes model code"
+  risk), surfaced to the developer as ordinary test feedback.
+- **One structured-output repair.** `generateStructured` re-asks once with the Zod
+  errors appended on a parse failure — exactly the single repair §11 leaves in scope.
+
 ## Out of scope (per §11)
 
 No VS Code extension/webview, persistence, distributed queues, auth, HITL, or

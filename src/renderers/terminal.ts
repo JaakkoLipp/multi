@@ -51,6 +51,9 @@ export function emptyState(): ViewState {
 
 export function reduce(state: ViewState, e: PipelineEvent): void {
   switch (e.type) {
+    case "pipeline.started":
+      note(state, `run ${e.runId} started`);
+      break;
     case "wbs.created":
       state.total = e.items.length;
       note(state, `WBS created: ${e.items.length} items`);

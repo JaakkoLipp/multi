@@ -117,6 +117,7 @@ const PAGE = `<!doctype html>
   es.addEventListener("item.failed", e => { const d = JSON.parse(e.data); stages[d.stage].delete(d.itemId); draw(); });
   es.addEventListener("item.reworked", e => { const d = JSON.parse(e.data); reworks++; stages.tester.delete(d.itemId); log(\`\${d.itemId} reworked → dev (attempt \${d.attempt})\`, "rework"); draw(); });
   es.addEventListener("item.finalized", e => { const r = JSON.parse(e.data).record; done++; if (r.passed) pass++; log(\`\${r.workItem.id} \${r.passed?"PASS":"FAIL"} (\${r.attempts} attempts)\`, r.passed?"pass":"fail"); draw(); });
+  es.addEventListener("pipeline.cancelled", e => { log("cancelled: " + JSON.parse(e.data).reason, "rework"); document.getElementById("summary").textContent += " · CANCELLED"; });
   es.addEventListener("pipeline.done", () => es.close());
 </script>
 `;

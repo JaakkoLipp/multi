@@ -103,6 +103,8 @@ async function runPipeline(
   const records = new Map<string, FinalRecord>();
   const emit = (e: PipelineEvent) => bus.emit(e);
 
+  emit({ type: "pipeline.started", runId, prompt, startedAt: Date.now() });
+
   // --- WBS ------------------------------------------------------------------
   const wbs = await agents.orchestrate(prompt, config.maxWbsItems);
   const items: WorkItem[] = wbs.items.slice(0, config.maxWbsItems).map((raw, i) => ({

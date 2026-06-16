@@ -9,6 +9,7 @@
  *   <prompt> [--stub] [--no-ui] [--record [file]] [--serve] [--port N]
  *   --replay <file> [--no-ui] [--speed ms]   (re-draws a recorded run, no engine)
  */
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import pc from "picocolors";
 import { createStubAgents } from "./agents/stub.js";
@@ -16,6 +17,8 @@ import type { Agents } from "./agents/types.js";
 import { loadConfig } from "./config.js";
 import type { FinalRecord } from "./contracts.js";
 import { createPipeline } from "./engine.js";
+import type { PipelineEvent } from "./events.js";
+import { formatSummary, summarize } from "./metrics.js";
 import { attachLogRenderer } from "./renderers/log.js";
 import { attachRecorder, replay } from "./renderers/recorder.js";
 import { startSseServer } from "./renderers/sse.js";
@@ -30,6 +33,7 @@ interface Cli {
   serve: boolean;
   port: number;
   speed: number;
+  json: boolean;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -37,6 +41,7 @@ function parseArgs(argv: string[]): Cli {
   let noUi = false;
   let stub = false;
   let serve = false;
+  let json = false;
   let record: string | null = null;
   let replayFile: string | null = null;
   let port = 7717;
@@ -61,6 +66,7 @@ function parseArgs(argv: string[]): Cli {
       case "--no-ui": noUi = true; break;
       case "--stub": stub = true; break;
       case "--serve": serve = true; break;
+      case "--json": json = true; noUi = true; break;
       case "--record": {
         const { value, next } = valueOf(arg, i);
         record = value ?? path.resolve("workspace", "events.ndjson");
@@ -91,7 +97,7 @@ function parseArgs(argv: string[]): Cli {
 
   return {
     prompt: positionals.join(" ").trim(),
-    noUi, stub, serve, record, replayFile, port, speed,
+    noUi, stub, serve, record, replayFile, port, speed, json,
   };
 }
 
@@ -113,6 +119,7 @@ function usage(): never {
       `  --no-ui         plain event log instead of the live view (proves headlessness)\n` +
       `  --record [file] persist the event stream as NDJSON (default workspace/events.ndjson)\n` +
       `  --serve         broadcast the stream over SSE; open the printed URL to watch in a browser\n` +
+      `  --json          machine-readable {summary, records} to stdout (implies --no-ui)\n` +
       `  --replay <file> re-draw a recorded run with NO engine (proves the renderer seam)`,
   );
   process.exit(2);
@@ -153,10 +160,18 @@ async function main(): Promise<void> {
   // Every renderer is a plain subscriber. Attach as many as requested; the
   // engine has no idea any of them exist.
   const detachers: Array<() => void> = [];
-  detachers.push(
-    cli.noUi ? attachLogRenderer(pipeline.on) : attachTerminalRenderer(pipeline.on),
-  );
+  if (!cli.json) {
+    // --json keeps stdout clean for the machine-readable payload, so no
+    // human-facing renderer is attached in that mode.
+    detachers.push(
+      cli.noUi ? attachLogRenderer(pipeline.on) : attachTerminalRenderer(pipeline.on),
+    );
+  }
   if (cli.record) detachers.push(attachRecorder(pipeline.on, cli.record));
+
+  // A collector so we can compute the run summary purely from the stream.
+  const events: PipelineEvent[] = [];
+  detachers.push(pipeline.on((e) => events.push(e)));
 
   const sse = cli.serve ? await startSseServer(pipeline.on, { port: cli.port }) : null;
   if (sse) console.log(pc.cyan(`\nLive view (SSE): ${sse.url}\n`));
@@ -175,8 +190,20 @@ async function main(): Promise<void> {
     for (const d of detachers) d();
   }
 
-  printSummary(records);
-  if (cli.record) console.log(pc.dim(`\nRecorded event log: ${cli.record}`));
+  const summary = summarize(events);
+  const summaryPath = path.join(workspaceDir, "output", "summary.json");
+  await mkdir(path.dirname(summaryPath), { recursive: true });
+  await writeFile(summaryPath, JSON.stringify({ summary, records }, null, 2), "utf8");
+
+  if (cli.json) {
+    process.stdout.write(JSON.stringify({ summary, records }, null, 2) + "\n");
+  } else {
+    printSummary(records);
+    console.log("\n" + pc.bold("Metrics"));
+    console.log(formatSummary(summary));
+    console.log(pc.dim(`\nRun summary: ${summaryPath}`));
+    if (cli.record) console.log(pc.dim(`Recorded event log: ${cli.record}`));
+  }
 
   if (sse) {
     console.log(pc.cyan(`\nServing the recorded run at ${sse.url} — press Ctrl-C to stop.`));

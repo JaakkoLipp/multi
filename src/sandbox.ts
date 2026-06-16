@@ -36,6 +36,53 @@ export const TEST_FILE = `${SOURCE_MODULE}.test.ts`;
 /** The import specifier generated tests must use to reach the module under test. */
 export const SOURCE_IMPORT = `./${SOURCE_MODULE}`;
 
+/**
+ * Defense-in-depth import allowlist for the model-generated SOURCE module.
+ *
+ * The developer agent is instructed that the generated module must have NO
+ * imports and NO external dependencies (see DEVELOPER_INSTRUCTIONS). This
+ * function scans the source for module specifiers that pull in anything outside
+ * the file itself, so such code is rejected BEFORE it ever executes. It applies
+ * ONLY to the generated source — the test file legitimately imports `vitest`
+ * and `./module`.
+ *
+ * A specifier is DISALLOWED when it is a "bare" specifier: it does NOT start
+ * with "./", "../", or "/". This means node: builtins ("node:fs"), node bare
+ * builtins ("fs"), and npm packages ("lodash") are all flagged. Relative
+ * specifiers ("./util", "../x") are allowed (not a security risk).
+ *
+ * This is a deliberately simple regex scan, not a full parser — it covers the
+ * common forms: `import ... from "X"`, `import "X"`, `export ... from "X"`, and
+ * `require("X")`.
+ */
+export function findDisallowedImports(sourceCode: string): string[] {
+  const found: string[] = [];
+
+  // `import ... from "X"` and `export ... from "X"` (the `from` clause).
+  const fromRe = /\b(?:import|export)\b[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/g;
+  // Side-effect import: `import "X"` (no `from`).
+  const bareImportRe = /\bimport\s*['"]([^'"]+)['"]/g;
+  // CommonJS `require("X")`.
+  const requireRe = /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+  for (const re of [fromRe, bareImportRe, requireRe]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(sourceCode)) !== null) {
+      const spec = m[1];
+      if (spec === undefined) continue;
+      // Relative / absolute path specifiers are allowed; everything else
+      // (bare names, node: builtins) is disallowed.
+      const isRelative =
+        spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/");
+      if (!isRelative && !found.includes(spec)) {
+        found.push(spec);
+      }
+    }
+  }
+
+  return found;
+}
+
 export interface SandboxRun {
   /** Absolute directory this attempt was materialized into. */
   dir: string;
@@ -56,6 +103,19 @@ export interface RunTestsArgs {
 
 export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
   const { dir, sourceCode, testSource, timeoutMs, signal } = args;
+
+  // Defense-in-depth: reject model-generated source that pulls in external
+  // modules before writing files or spawning vitest. The engine treats this as
+  // a normal test failure and routes the feedback back to the developer.
+  const disallowed = findDisallowedImports(sourceCode);
+  if (disallowed.length > 0) {
+    return {
+      dir,
+      passed: false,
+      stdout: "",
+      stderr: `[sandbox] disallowed imports in generated module: ${disallowed.join(", ")}`,
+    };
+  }
 
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });

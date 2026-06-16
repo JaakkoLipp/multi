@@ -49,11 +49,20 @@ npx tsx src/cli.ts --replay workspace/run.ndjson
 
 # Watch a run in a browser — the engine broadcasts its stream over SSE:
 npx tsx src/cli.ts "string utils" --stub --serve   # open the printed URL
+
+# Machine-readable output for scripts/CI:
+npx tsx src/cli.ts "string utils" --stub --json | jq .summary
 ```
 
 Flags: `--stub` (LLM-free deterministic agents), `--no-ui` (plain event log),
 `--record [file]` (persist the stream as NDJSON), `--replay <file>` (re-draw a
-recording with no engine), `--serve`/`--port N` (broadcast over SSE).
+recording with no engine), `--serve`/`--port N` (broadcast over SSE), `--json`
+(machine-readable `{summary, records}`).
+
+Every run also writes `workspace/output/summary.json` (the aggregate metrics +
+final records) and the terminal prints a per-stage metrics block (run counts,
+total/avg/max time, rework count, pass rate). `Ctrl-C` cancels cooperatively:
+in-flight tests are killed and the run still resolves with a summary.
 
 Passing modules are written to `workspace/output/<id>-<fn>/` as `module.ts` +
 `module.test.ts`; each spec passes when run independently
@@ -99,12 +108,13 @@ fully local / EU-sovereign setup works.
 | `src/contracts.ts` | Zod schemas + inferred types (the data contracts) |
 | `src/events.ts` | `PipelineEvent` union + typed `EventBus` (the seam) |
 | `src/queue.ts` | `AsyncQueue` / `WorkerPool` / `CompletionLatch` (D2) |
-| `src/sandbox.ts` | write + run generated specs in isolation (D3) |
+| `src/sandbox.ts` | write + run generated specs in isolation + import allowlist (D3) |
 | `src/llm.ts` | AI-SDK provider bound to LiteLLM + `generateObject` helper |
-| `src/agents/*` | orchestrator / designer / developer / tester (Mastra) + stubs |
-| `src/engine.ts` | headless: wires queues + workers, emits events, awaits completion |
-| `src/renderers/*` | `terminal.ts` (live view) and `log.ts` (`--no-ui`) — subscribers only |
-| `src/cli.ts` | entrypoint: argv + env + renderer + summary |
+| `src/metrics.ts` | pure `summarize(events)` fold → run summary / aggregate metrics |
+| `src/agents/*` | orchestrator / designer / developer / tester (Mastra) + stubs; one structured-output repair retry |
+| `src/engine.ts` | headless: wires queues + workers, emits events, cancellation, awaits completion |
+| `src/renderers/*` | `terminal.ts`, `log.ts`, `recorder.ts` (NDJSON record/replay), `sse.ts` — subscribers only |
+| `src/cli.ts` | entrypoint: argv + env + renderers + summary |
 
 The engine modules import nothing from `vscode` and nothing CLI-only; the CLI
 imports the engine, and the future extension will import the same engine. See
@@ -122,6 +132,21 @@ survives a `JSON.parse(JSON.stringify(...))` round-trip
 (`test/serialization.test.ts`), and no engine module imports `vscode` or a
 CLI-only API (`test/headless.test.ts`). The engine tests run the full pipeline on
 stub agents with **real** Vitest execution, including the dev↔tester rework loop.
+
+## Robustness
+
+- **Cooperative cancellation.** `run(prompt, { signal })` (and `Ctrl-C` from the
+  CLI) aborts cleanly: in-flight test runs are killed via the signal threaded
+  into the sandbox, pending items are finalized as cancelled, and `run()` still
+  resolves with a record per item. Surfaced as a `pipeline.cancelled` event.
+- **Sandbox import allowlist.** The generated module must be self-contained;
+  `sandbox.ts` rejects any source that imports an external/`node:` module
+  *before* executing it, and routes that back to the developer as feedback.
+- **One structured-output repair.** If an LLM stage returns a value that fails
+  its Zod schema, the agent is re-asked exactly once with the validation errors
+  appended before the item is failed (`agents/mastra.ts`).
+- **Per-stage metrics.** Each stage emits an `item.metrics` event; `summarize()`
+  folds the stream into pass rate, rework count, and per-stage timing.
 
 ## ⚠️ Security
 
