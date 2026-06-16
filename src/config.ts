@@ -22,6 +22,7 @@ const ConfigSchema = z.object({
     designer: z.string().min(1),
     developer: z.string().min(1),
     tester: z.string().min(1),
+    reviewer: z.string().min(1),
   }),
   maxWbsItems: intFromEnv(6),
   maxReworkAttempts: z
@@ -34,6 +35,11 @@ const ConfigSchema = z.object({
     designer: intFromEnv(1),
     developer: intFromEnv(2),
     tester: intFromEnv(2),
+  }),
+  review: z.object({
+    // A critic reviews the developer's code against the spec before testing;
+    // rejections reuse the rework edge. Off by default.
+    enabled: z.boolean(),
   }),
   gates: z.object({
     // Quality gates run after unit tests pass; a failing gate routes the item
@@ -65,6 +71,7 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
       designer: env.DESIGNER_MODEL ?? "gpt-4o",
       developer: env.DEVELOPER_MODEL ?? "gpt-4o-mini",
       tester: env.TESTER_MODEL ?? "gpt-4o-mini",
+      reviewer: env.REVIEWER_MODEL ?? env.DESIGNER_MODEL ?? "gpt-4o",
     },
     maxWbsItems: env.MAX_WBS_ITEMS,
     maxReworkAttempts: env.MAX_REWORK_ATTEMPTS,
@@ -73,6 +80,9 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
       designer: env.DESIGNER_CONCURRENCY,
       developer: env.DEVELOPER_CONCURRENCY,
       tester: env.TESTER_CONCURRENCY,
+    },
+    review: {
+      enabled: boolFromEnv(env.REVIEW_ENABLED, false),
     },
     gates: {
       typecheck: boolFromEnv(env.GATE_TYPECHECK, false),

@@ -10,6 +10,7 @@ import type { PipelineConfig } from "../config.js";
 import { makeDesigner } from "./designer.js";
 import { makeDeveloper } from "./developer.js";
 import { makeOrchestrator } from "./orchestrator.js";
+import { makeReviewer } from "./reviewer.js";
 import { makeTester } from "./tester.js";
 import type { Agents } from "./types.js";
 
@@ -24,6 +25,7 @@ export function createRealAgents(config: PipelineConfig): Agents {
   const design = makeDesigner(model(config.models.designer));
   const develop = makeDeveloper(model(config.models.developer));
   const writeTests = makeTester(model(config.models.tester));
+  const review = makeReviewer(model(config.models.reviewer));
 
-  return { orchestrate, design, develop, writeTests };
+  return { orchestrate, design, develop, writeTests, review };
 }

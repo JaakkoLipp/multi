@@ -21,6 +21,7 @@ export type PipelineEvent =
   | { type: "item.started"; stage: Stage; itemId: string; worker: number }
   | { type: "item.completed"; stage: Stage; itemId: string; worker: number }
   | { type: "item.reworked"; itemId: string; attempt: number; feedback: string }
+  | { type: "item.reviewed"; itemId: string; attempt: number; approved: boolean; notes: string }
   | {
       type: "item.gate";
       itemId: string;

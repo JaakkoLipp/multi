@@ -92,6 +92,9 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
     case "item.gate":
       if (!e.passed) note(state, `${e.itemId} gate ${pc.yellow(e.gate)} failed`);
       break;
+    case "item.reviewed":
+      if (!e.approved) note(state, `${e.itemId} review: ${pc.yellow("changes requested")}`);
+      break;
     case "pipeline.cancelled":
       state.cancelled = true;
       note(state, pc.yellow(`cancelled: ${e.reason}`));

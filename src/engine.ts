@@ -328,6 +328,26 @@ async function runPipeline(
         s.attempts = job.attempt;
         s.sourceCode = code.sourceCode;
         emit({ type: "item.completed", stage: "developer", itemId: item.id, worker });
+
+        // Optional critic pass before testing. A rejection reuses the rework
+        // edge (re-enqueue to the developer); on an exhausted budget we let the
+        // tester be the final arbiter rather than failing on the critic alone.
+        if (config.review.enabled) {
+          const verdict = await timed("developer", item.id, job.attempt, () =>
+            agents.review({ item, spec: job.spec, sourceCode: code.sourceCode, attempt: job.attempt }),
+          );
+          if (cancelled) return;
+          emit({ type: "item.reviewed", itemId: item.id, attempt: job.attempt, approved: verdict.approved, notes: verdict.notes });
+          if (!verdict.approved && job.attempt <= config.maxReworkAttempts) {
+            const nextAttempt = job.attempt + 1;
+            s.lastError = verdict.notes;
+            emit({ type: "item.reworked", itemId: item.id, attempt: nextAttempt, feedback: verdict.notes });
+            developerQueue.push({ item, spec: job.spec, attempt: nextAttempt, previousCode: code.sourceCode, feedback: verdict.notes });
+            emit({ type: "item.enqueued", stage: "developer", itemId: item.id, queueDepth: developerQueue.depth });
+            return;
+          }
+        }
+
         testerQueue.push({ item, spec: job.spec, code });
         emit({ type: "item.enqueued", stage: "tester", itemId: item.id, queueDepth: testerQueue.depth });
       } catch (err) {

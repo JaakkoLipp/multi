@@ -4,7 +4,13 @@
  * model), and so the prompts are easy to tune without touching wiring.
  */
 import type { DesignSpec } from "../contracts.js";
-import type { DesignInput, DependencyContext, DevelopInput, WriteTestsInput } from "./types.js";
+import type {
+  DesignInput,
+  DependencyContext,
+  DevelopInput,
+  ReviewInput,
+  WriteTestsInput,
+} from "./types.js";
 
 export const ORCHESTRATOR_INSTRUCTIONS = `You are an orchestrator that decomposes a single software request into a Work Breakdown Structure.
 Prefer INDEPENDENT work items so they can be built concurrently. For a request like
@@ -38,6 +44,14 @@ Rules:
 - Import the function under test from the provided import path.
 - Cover the behavior, the listed edge cases, and the examples.
 - Output ONLY the test file source in testSource.`;
+
+export const REVIEWER_INSTRUCTIONS = `You are a meticulous code reviewer. Review the developer's implementation against
+its design spec and acceptance criteria BEFORE it is tested.
+- approved: true only if the code correctly and completely implements the spec, handles the
+  listed edge cases, exports the exact signature, and is self-contained (no imports).
+- notes: when not approved, give specific, actionable change requests the developer can act on.
+  When approved, leave notes empty.
+Be strict but fair: do not reject for style nitpicks if behavior is correct.`;
 
 export function renderOrchestratorPrompt(prompt: string, maxItems: number): string {
   return `Request:\n${prompt}\n\nProduce at most ${maxItems} independent work items.`;
@@ -90,6 +104,23 @@ export function renderDeveloperPrompt(input: DevelopInput): string {
     );
   }
   return lines.join("\n");
+}
+
+export function renderReviewerPrompt(input: ReviewInput): string {
+  return [
+    `Review the implementation of ${input.spec.functionName} (work item ${input.item.id}, attempt ${input.attempt}).`,
+    `Signature: ${input.spec.signature}`,
+    `Behavior: ${input.spec.behavior}`,
+    `Edge cases:`,
+    ...input.spec.edgeCases.map((c) => `- ${c}`),
+    `Acceptance criteria:`,
+    ...input.item.acceptanceCriteria.map((c) => `- ${c}`),
+    "",
+    `Implementation under review:`,
+    "```ts",
+    input.sourceCode,
+    "```",
+  ].join("\n");
 }
 
 export function renderTesterPrompt(input: WriteTestsInput): string {

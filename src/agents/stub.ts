@@ -15,12 +15,19 @@
 import type {
   CodeOutput,
   DesignOutput,
+  ReviewOutput,
   TestOutput,
   WbsOutput,
   WorkItem,
 } from "../contracts.js";
 import { SOURCE_IMPORT } from "../sandbox.js";
-import type { Agents, DesignInput, DevelopInput, WriteTestsInput } from "./types.js";
+import type {
+  Agents,
+  DesignInput,
+  DevelopInput,
+  ReviewInput,
+  WriteTestsInput,
+} from "./types.js";
 
 interface FnSpec {
   name: string;
@@ -180,6 +187,16 @@ ${f.tests}
 });
 `;
       return { testSource };
+    },
+
+    async review(input: ReviewInput): Promise<ReviewOutput> {
+      // The deterministic critic approves any non-empty implementation that
+      // exports the expected function. Rejection behaviour is exercised by a
+      // dedicated test with a custom critic.
+      const approved =
+        input.sourceCode.includes(`export function ${input.spec.functionName}`) &&
+        !input.sourceCode.includes("TODO");
+      return { approved, notes: approved ? "" : "Implement the function fully (no TODOs)." };
     },
   };
 }

@@ -156,6 +156,13 @@ design and is fully tested against deterministic stubs.
   coverage = vitest v8 `json-summary` parsed for line %. Gated behind config so
   the default fast path and the test suite stay quick; `--gates` enables them.
 
+- **Review loop.** A critic agent (a fifth model role, but NOT a fourth queue/
+  stage — the brief caps *roles*/stages at three pipeline stages; the reviewer is
+  an in-developer-stage sub-step) reviews code before testing. Rejections reuse
+  the rework edge so concurrency/back-pressure semantics are unchanged. To avoid
+  failing on subjective critique alone, an exhausted review budget falls through
+  to the tester, which stays the ground-truth arbiter.
+
 ## Out of scope (per §11)
 
 No VS Code extension/webview, persistence, distributed queues, auth, HITL, or

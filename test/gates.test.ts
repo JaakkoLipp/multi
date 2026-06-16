@@ -7,7 +7,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
-import type { CodeOutput, DesignOutput, TestOutput, WbsOutput } from "../src/contracts.js";
+import type { CodeOutput, DesignOutput, ReviewOutput, TestOutput, WbsOutput } from "../src/contracts.js";
 import { createPipeline } from "../src/engine.js";
 import type { PipelineEvent } from "../src/events.js";
 import { lintModule, runTests, SOURCE_IMPORT, typecheckModule } from "../src/sandbox.js";
@@ -33,6 +33,9 @@ function oneItemAgents(sourceCode: string, testSource = PASS_TEST): Agents {
     },
     async writeTests(_input: WriteTestsInput): Promise<TestOutput> {
       return { testSource };
+    },
+    async review(): Promise<ReviewOutput> {
+      return { approved: true, notes: "" };
     },
   };
 }

@@ -102,3 +102,10 @@ export const TestOutput = z.object({
   testSource: z.string(),
 });
 export type TestOutput = z.infer<typeof TestOutput>;
+
+export const ReviewOutput = z.object({
+  approved: z.boolean(),
+  /** Specific, actionable change requests when not approved (empty otherwise). */
+  notes: z.string(),
+});
+export type ReviewOutput = z.infer<typeof ReviewOutput>;

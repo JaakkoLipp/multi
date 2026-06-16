@@ -150,6 +150,11 @@ stub agents with **real** Vitest execution, including the dev↔tester rework lo
   coverage threshold. A failing gate routes the item back to the developer with
   the gate output as feedback. Enable with `--gates` or `GATE_*` env vars; each
   is surfaced as an `item.gate` event. Off by default.
+- **Review loop.** With `--review` (or `REVIEW_ENABLED`), a critic reviews the
+  developer's code against the spec/acceptance criteria *before* testing; a
+  rejection reuses the rework edge (no extra queue) and surfaces as an
+  `item.reviewed` event. An exhausted budget falls through to the tester, which
+  remains the final arbiter.
 - **Dependency-aware scheduling (DAG).** The orchestrator can express
   dependencies between work items; the engine validates acyclicity and schedules
   topologically — dependents wait (`item.blocked`) until their dependencies pass

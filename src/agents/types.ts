@@ -8,6 +8,7 @@ import type {
   CodeOutput,
   DesignOutput,
   DesignSpec,
+  ReviewOutput,
   TestOutput,
   WbsOutput,
   WorkItem,
@@ -39,9 +40,18 @@ export interface WriteTestsInput {
   importPath: string;
 }
 
+export interface ReviewInput {
+  item: WorkItem;
+  spec: DesignSpec;
+  sourceCode: string;
+  attempt: number;
+}
+
 export interface Agents {
   orchestrate(prompt: string, maxItems: number): Promise<WbsOutput>;
   design(input: DesignInput): Promise<DesignOutput>;
   develop(input: DevelopInput): Promise<CodeOutput>;
   writeTests(input: WriteTestsInput): Promise<TestOutput>;
+  /** Optional critic pass (used only when the review loop is enabled). */
+  review(input: ReviewInput): Promise<ReviewOutput>;
 }

@@ -35,6 +35,7 @@ interface Cli {
   speed: number;
   json: boolean;
   gates: string | null;
+  review: boolean;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -48,6 +49,7 @@ function parseArgs(argv: string[]): Cli {
   let port = 7717;
   let speed = 120;
   let gates: string | null = null;
+  let review = false;
 
   const valueOf = (arg: string, i: number): { value: string | null; next: number } => {
     const eq = arg.indexOf("=");
@@ -68,6 +70,7 @@ function parseArgs(argv: string[]): Cli {
       case "--no-ui": noUi = true; break;
       case "--stub": stub = true; break;
       case "--serve": serve = true; break;
+      case "--review": review = true; break;
       case "--json": json = true; noUi = true; break;
       case "--record": {
         const { value, next } = valueOf(arg, i);
@@ -105,7 +108,7 @@ function parseArgs(argv: string[]): Cli {
 
   return {
     prompt: positionals.join(" ").trim(),
-    noUi, stub, serve, record, replayFile, port, speed, json, gates,
+    noUi, stub, serve, record, replayFile, port, speed, json, gates, review,
   };
 }
 
@@ -129,6 +132,7 @@ function usage(): never {
       `  --serve         broadcast the stream over SSE; open the printed URL to watch in a browser\n` +
       `  --json          machine-readable {summary, records} to stdout (implies --no-ui)\n` +
       `  --gates [list]  quality gates after tests (default typecheck,lint,coverage)\n` +
+      `  --review        critic reviews code before testing (rejections rework)\n` +
       `  --replay <file> re-draw a recorded run with NO engine (proves the renderer seam)`,
   );
   process.exit(2);
@@ -159,6 +163,7 @@ async function main(): Promise<void> {
     config.gates.lint = set.has("lint");
     config.gates.coverage = set.has("coverage");
   }
+  if (cli.review) config.review.enabled = true;
   const workspaceDir = path.resolve("workspace");
 
   let agents: Agents;
