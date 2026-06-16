@@ -42,9 +42,18 @@ npx tsx src/cli.ts "string utils" --stub
 
 # Prove the engine is headless — same engine, plain event log instead of the live view:
 npx tsx src/cli.ts "string utils" --stub --no-ui
+
+# Record the event stream, then re-draw the run with NO engine (proves the seam):
+npx tsx src/cli.ts "string utils" --stub --record workspace/run.ndjson
+npx tsx src/cli.ts --replay workspace/run.ndjson
+
+# Watch a run in a browser — the engine broadcasts its stream over SSE:
+npx tsx src/cli.ts "string utils" --stub --serve   # open the printed URL
 ```
 
-Flags: `--stub` (LLM-free deterministic agents), `--no-ui` (plain event log).
+Flags: `--stub` (LLM-free deterministic agents), `--no-ui` (plain event log),
+`--record [file]` (persist the stream as NDJSON), `--replay <file>` (re-draw a
+recording with no engine), `--serve`/`--port N` (broadcast over SSE).
 
 Passing modules are written to `workspace/output/<id>-<fn>/` as `module.ts` +
 `module.test.ts`; each spec passes when run independently
@@ -56,6 +65,25 @@ Without `--no-ui` you get an in-place terminal view derived entirely from the
 event stream: per-stage worker activity, queue depths, rework count, and
 done/total — so you can watch designer, developer, and tester all working
 different items at once, and items bouncing back for rework.
+
+## Phase-2 seam, proven not just claimed
+
+Phase 2 (a Cline-style VS Code extension) runs the engine in the extension host
+and renders in a webview — a separate process fed only serializable messages.
+Three renderers already exercise that exact seam, all as pure `pipeline.on`
+subscribers the engine knows nothing about:
+
+- **`renderers/terminal.ts`** — the live in-place view (the webview's understudy).
+- **`renderers/recorder.ts`** — records the stream to NDJSON and `replay`s it into
+  any renderer with **no engine present**. `test/replay.test.ts` asserts the view
+  rebuilt from a recording is identical to the live one — i.e. the view is a pure
+  function of the (serializable) stream.
+- **`renderers/sse.ts`** — broadcasts the stream over SSE; a browser at `/` renders
+  the run with zero engine knowledge. This is `engine.on(e => transport.send(...))`
+  across a socket — the hardest version of the postMessage boundary. `test/sse.test.ts`
+  asserts a network client receives the byte-identical stream.
+
+Swapping in the webview is then a fourth renderer of the same shape.
 
 ## Configuration
 

@@ -14,12 +14,12 @@ import type { PipelineEvent } from "../events.js";
 
 const STAGES: Stage[] = ["designer", "developer", "tester"];
 
-interface StageView {
+export interface StageView {
   depth: number;
   active: Set<string>;
 }
 
-interface ViewState {
+export interface ViewState {
   total: number;
   done: number;
   passed: number;
@@ -29,7 +29,7 @@ interface ViewState {
   lastEvents: string[];
 }
 
-function emptyState(): ViewState {
+export function emptyState(): ViewState {
   return {
     total: 0,
     done: 0,
@@ -45,7 +45,7 @@ function emptyState(): ViewState {
   };
 }
 
-function reduce(state: ViewState, e: PipelineEvent): void {
+export function reduce(state: ViewState, e: PipelineEvent): void {
   switch (e.type) {
     case "wbs.created":
       state.total = e.items.length;
@@ -112,6 +112,17 @@ function render(state: ViewState): string {
     : "";
 
   return [header, "", ...rows, "", recent].join("\n");
+}
+
+/**
+ * Fold an event sequence into a view state. Pure: the entire view is a function
+ * of the stream and nothing else. This is what lets a recorded run be replayed
+ * (or a webview re-render) and produce byte-identical state.
+ */
+export function buildView(events: Iterable<PipelineEvent>): ViewState {
+  const state = emptyState();
+  for (const e of events) reduce(state, e);
+  return state;
 }
 
 /** Attach the live view. Returns a detach function. */

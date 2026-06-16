@@ -101,6 +101,13 @@ Recorded here for traceability since it shaped the module boundaries:
 - **Renderer as subscriber.** `renderers/terminal.ts` and `renderers/log.ts`
   attach via `pipeline.on`; the engine has no reference to them. `--no-ui` runs
   the identical engine with the plain-log renderer.
+- **Seam proven by two extra transports.** `renderers/recorder.ts` records the
+  stream to NDJSON and replays it into any renderer *with no engine*, and
+  `renderers/sse.ts` broadcasts it over a socket to a browser. Tests assert the
+  replayed view equals the live view and that a network client receives the
+  byte-identical stream — so the phase-2 webview is demonstrably a fourth
+  same-shaped renderer, not a refactor. `buildView()` is exported as the pure
+  fold that makes "the view is a function of the stream" a checkable property.
 
 ## UI library: **`log-update` (+ `picocolors`)**
 
