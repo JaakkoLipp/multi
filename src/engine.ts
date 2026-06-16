@@ -17,6 +17,7 @@ import {
   CodeArtifact,
   type DesignSpec,
   type FinalRecord,
+  type Stage,
   type WorkItem,
 } from "./contracts.js";
 import { EventBus, type EventListener, type PipelineEvent } from "./events.js";
@@ -31,8 +32,14 @@ export interface CreatePipelineOptions {
   workspaceDir?: string;
 }
 
+export interface RunOptions {
+  /** Abort the run cooperatively: in-flight test execution is killed, remaining
+   * items are finalized as cancelled, and run() resolves with their records. */
+  signal?: AbortSignal;
+}
+
 export interface Pipeline {
-  run(prompt: string): Promise<FinalRecord[]>;
+  run(prompt: string, opts?: RunOptions): Promise<FinalRecord[]>;
   /** Subscribe to the event stream. Returns an unsubscribe function. */
   on(listener: EventListener): () => void;
   /** Async-iterable view of the same stream. */
@@ -69,7 +76,7 @@ export function createPipeline(options: CreatePipelineOptions): Pipeline {
   return {
     on: (l) => bus.on(l),
     events: () => bus.events(),
-    run: (prompt) => runPipeline({ config, agents, workspaceDir, bus }, prompt),
+    run: (prompt, opts) => runPipeline({ config, agents, workspaceDir, bus }, prompt, opts),
   };
 }
 
@@ -81,6 +88,7 @@ async function runPipeline(
     bus: EventBus;
   },
   prompt: string,
+  opts: RunOptions = {},
 ): Promise<FinalRecord[]> {
   const { config, agents, workspaceDir, bus } = ctx;
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
@@ -126,14 +134,56 @@ async function runPipeline(
     latch.settleOne();
   };
 
+  // --- Cancellation ---------------------------------------------------------
+  // On abort: stop scheduling new work, kill in-flight test runs (via the
+  // signal threaded into the sandbox), and finalize everything still pending as
+  // cancelled. That settles the latch, so run() resolves cleanly with records.
+  const { signal } = opts;
+  let cancelled = false;
+  const onAbort = () => {
+    if (cancelled) return;
+    cancelled = true;
+    emit({ type: "pipeline.cancelled", reason: abortReason(signal) });
+    for (const item of items) {
+      if (records.has(item.id)) continue;
+      const s = states.get(item.id)!;
+      if (s.lastError === null) s.lastError = "cancelled";
+      finalize(item);
+    }
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  // Time one stage's processing and emit an item.metrics event.
+  const timed = async <T>(
+    stage: Stage,
+    itemId: string,
+    attempt: number,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = performance.now();
+    try {
+      return await fn();
+    } finally {
+      emit({
+        type: "item.metrics",
+        stage,
+        itemId,
+        attempt,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
+  };
+
   // --- Designer stage -------------------------------------------------------
   const designerPool = new WorkerPool<WorkItem>(
     designerQueue,
     config.concurrency.designer,
     async (item, worker) => {
+      if (cancelled) return;
       emit({ type: "item.started", stage: "designer", itemId: item.id, worker });
       try {
-        const out = await agents.design(item);
+        const out = await timed("designer", item.id, 1, () => agents.design(item));
+        if (cancelled) return;
         const spec: DesignSpec = { workItemId: item.id, ...out };
         emit({ type: "item.completed", stage: "designer", itemId: item.id, worker });
         developerQueue.push({ item, spec, attempt: 1, previousCode: null, feedback: null });
@@ -153,14 +203,18 @@ async function runPipeline(
     config.concurrency.developer,
     async (job, worker) => {
       const { item } = job;
+      if (cancelled) return;
       emit({ type: "item.started", stage: "developer", itemId: item.id, worker });
       try {
-        const out = await agents.develop({
-          spec: job.spec,
-          previousCode: job.previousCode,
-          feedback: job.feedback,
-          attempt: job.attempt,
-        });
+        const out = await timed("developer", item.id, job.attempt, () =>
+          agents.develop({
+            spec: job.spec,
+            previousCode: job.previousCode,
+            feedback: job.feedback,
+            attempt: job.attempt,
+          }),
+        );
+        if (cancelled) return;
         const code = CodeArtifact.parse({
           workItemId: item.id,
           functionName: out.functionName,
@@ -189,24 +243,30 @@ async function runPipeline(
     config.concurrency.tester,
     async (job, worker) => {
       const { item, spec, code } = job;
+      if (cancelled) return;
       emit({ type: "item.started", stage: "tester", itemId: item.id, worker });
       try {
-        const { testSource } = await agents.writeTests({
-          spec,
-          functionName: code.functionName,
-          sourceCode: code.sourceCode,
-          importPath: SOURCE_IMPORT,
-        });
         const s = states.get(item.id)!;
-        s.testSource = testSource;
-
-        const attemptDir = path.join(runDir, item.id, `attempt-${code.attempt}`);
-        const result = await runTests({
-          dir: attemptDir,
-          sourceCode: code.sourceCode,
-          testSource,
-          timeoutMs: config.testTimeoutMs,
+        const { testSource, result } = await timed("tester", item.id, code.attempt, async () => {
+          const authored = await agents.writeTests({
+            spec,
+            functionName: code.functionName,
+            sourceCode: code.sourceCode,
+            importPath: SOURCE_IMPORT,
+          });
+          s.testSource = authored.testSource;
+          const attemptDir = path.join(runDir, item.id, `attempt-${code.attempt}`);
+          const run = await runTests({
+            dir: attemptDir,
+            sourceCode: code.sourceCode,
+            testSource: authored.testSource,
+            timeoutMs: config.testTimeoutMs,
+            signal,
+          });
+          return { testSource: authored.testSource, result: run };
         });
+        void testSource;
+        if (cancelled) return;
 
         if (result.passed) {
           s.passed = true;
@@ -248,12 +308,18 @@ async function runPipeline(
   developerPool.start();
   testerPool.start();
 
-  for (const item of items) {
-    designerQueue.push(item);
-    emit({ type: "item.enqueued", stage: "designer", itemId: item.id, queueDepth: designerQueue.depth });
+  // Honour a signal that was already aborted before we started.
+  if (signal?.aborted) onAbort();
+
+  if (!cancelled) {
+    for (const item of items) {
+      designerQueue.push(item);
+      emit({ type: "item.enqueued", stage: "designer", itemId: item.id, queueDepth: designerQueue.depth });
+    }
   }
 
   await latch.done;
+  signal?.removeEventListener("abort", onAbort);
 
   // Every item is terminal: no worker is mid-flight and nothing will be pushed
   // again, so closing the queues just releases the idle pulls cleanly.
@@ -265,6 +331,13 @@ async function runPipeline(
   const finalRecords = items.map((it) => records.get(it.id)!);
   emit({ type: "pipeline.done", records: finalRecords });
   return finalRecords;
+}
+
+function abortReason(signal: AbortSignal | undefined): string {
+  const reason = signal?.reason;
+  if (reason === undefined || reason === null) return "aborted";
+  if (reason instanceof Error) return reason.message;
+  return String(reason);
 }
 
 async function writeOutput(

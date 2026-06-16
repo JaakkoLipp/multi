@@ -30,8 +30,12 @@ function format(e: PipelineEvent): string {
       return `[rework] ${e.itemId} attempt ${e.attempt}`;
     case "item.failed":
       return `[fail]  ${e.stage} ${e.itemId}: ${firstLine(e.error)}`;
+    case "item.metrics":
+      return `[time]  ${e.stage} ${e.itemId} a${e.attempt} ${e.durationMs}ms`;
     case "item.finalized":
       return `[final] ${e.record.workItem.id} ${e.record.passed ? "PASS" : "FAIL"} attempts=${e.record.attempts}`;
+    case "pipeline.cancelled":
+      return `[cancel] ${e.reason}`;
     case "pipeline.done":
       return `[pipeline] done: ${e.records.filter((r) => r.passed).length}/${e.records.length} passed`;
   }

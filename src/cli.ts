@@ -161,10 +161,17 @@ async function main(): Promise<void> {
   const sse = cli.serve ? await startSseServer(pipeline.on, { port: cli.port }) : null;
   if (sse) console.log(pc.cyan(`\nLive view (SSE): ${sse.url}\n`));
 
+  // Ctrl-C during a run aborts cooperatively: in-flight tests are killed and the
+  // pipeline finalizes the rest as cancelled, so we still get a summary.
+  const controller = new AbortController();
+  const onSigint = () => controller.abort(new Error("interrupted by user (SIGINT)"));
+  process.once("SIGINT", onSigint);
+
   let records: FinalRecord[];
   try {
-    records = await pipeline.run(cli.prompt);
+    records = await pipeline.run(cli.prompt, { signal: controller.signal });
   } finally {
+    process.removeListener("SIGINT", onSigint);
     for (const d of detachers) d();
   }
 

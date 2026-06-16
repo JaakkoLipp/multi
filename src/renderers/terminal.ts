@@ -25,6 +25,8 @@ export interface ViewState {
   passed: number;
   failed: number;
   reworks: number;
+  busyMs: number;
+  cancelled: boolean;
   stages: Record<Stage, StageView>;
   lastEvents: string[];
 }
@@ -36,6 +38,8 @@ export function emptyState(): ViewState {
     passed: 0,
     failed: 0,
     reworks: 0,
+    busyMs: 0,
+    cancelled: false,
     stages: {
       designer: { depth: 0, active: new Set() },
       developer: { depth: 0, active: new Set() },
@@ -70,6 +74,13 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
     case "item.failed":
       state.stages[e.stage].active.delete(e.itemId);
       break;
+    case "item.metrics":
+      state.busyMs += e.durationMs;
+      break;
+    case "pipeline.cancelled":
+      state.cancelled = true;
+      note(state, pc.yellow(`cancelled: ${e.reason}`));
+      break;
     case "item.finalized":
       state.done += 1;
       if (e.record.passed) state.passed += 1;
@@ -97,7 +108,10 @@ function render(state: ViewState): string {
     pc.dim("  ·  ") +
     `${pc.green(String(state.passed))} pass ${pc.red(String(state.failed))} fail` +
     pc.dim("  ·  ") +
-    `reworks ${pc.yellow(String(state.reworks))}`;
+    `reworks ${pc.yellow(String(state.reworks))}` +
+    pc.dim("  ·  ") +
+    `busy ${pc.bold(`${(state.busyMs / 1000).toFixed(1)}s`)}` +
+    (state.cancelled ? pc.dim("  ·  ") + pc.yellow("CANCELLED") : "");
 
   const rows = STAGES.map((stage) => {
     const v = state.stages[stage];

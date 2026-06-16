@@ -19,7 +19,9 @@ export type PipelineEvent =
   | { type: "item.completed"; stage: Stage; itemId: string; worker: number }
   | { type: "item.reworked"; itemId: string; attempt: number; feedback: string }
   | { type: "item.failed"; itemId: string; stage: Stage; error: string }
+  | { type: "item.metrics"; stage: Stage; itemId: string; attempt: number; durationMs: number }
   | { type: "item.finalized"; record: FinalRecord }
+  | { type: "pipeline.cancelled"; reason: string }
   | { type: "pipeline.done"; records: FinalRecord[] };
 
 export type PipelineEventType = PipelineEvent["type"];

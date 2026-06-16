@@ -50,10 +50,12 @@ export interface RunTestsArgs {
   sourceCode: string;
   testSource: string;
   timeoutMs: number;
+  /** Abort the child process early (used by the engine's cancellation path). */
+  signal?: AbortSignal;
 }
 
 export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
-  const { dir, sourceCode, testSource, timeoutMs } = args;
+  const { dir, sourceCode, testSource, timeoutMs, signal } = args;
 
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
@@ -83,16 +85,19 @@ export async function runTests(args: RunTestsArgs): Promise<SandboxRun> {
         killSignal: "SIGKILL",
         maxBuffer: 16 * 1024 * 1024,
         env: { ...process.env, CI: "true", FORCE_COLOR: "0" },
+        signal,
       },
       (error, stdout, stderr) => {
-        const timedOut = Boolean(
+        const killed = Boolean(
           error && (error as NodeJS.ErrnoException & { killed?: boolean }).killed,
         );
+        const aborted = Boolean(signal?.aborted);
+        const reason = aborted ? "cancelled" : killed ? `killed after ${timeoutMs}ms timeout` : "";
         resolve({
           dir,
           passed: !error,
           stdout: stdout ?? "",
-          stderr: (stderr ?? "") + (timedOut ? `\n[sandbox] killed after ${timeoutMs}ms timeout` : ""),
+          stderr: (stderr ?? "") + (reason ? `\n[sandbox] ${reason}` : ""),
         });
       },
     );

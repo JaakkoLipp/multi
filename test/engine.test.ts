@@ -108,6 +108,47 @@ describe("pipeline engine", () => {
     }
   }, 120_000);
 
+  it("emits per-stage timing metrics", async () => {
+    const { dir, cleanup } = await tmpWorkspace();
+    try {
+      const { events, done } = run(dir);
+      await done;
+      const metrics = events.filter((e) => e.type === "item.metrics");
+      expect(metrics.length).toBeGreaterThan(0);
+      for (const m of metrics) {
+        if (m.type !== "item.metrics") continue;
+        expect(m.durationMs).toBeGreaterThanOrEqual(0);
+        expect(["designer", "developer", "tester"]).toContain(m.stage);
+      }
+    } finally {
+      await cleanup();
+    }
+  }, 120_000);
+
+  it("cancels cooperatively: run() resolves with a record per item", async () => {
+    const { dir, cleanup } = await tmpWorkspace();
+    try {
+      const config = loadConfig({ MAX_WBS_ITEMS: "5" });
+      const pipeline = createPipeline({ config, agents: createStubAgents(), workspaceDir: dir });
+      const events: PipelineEvent[] = [];
+      pipeline.on((e) => events.push(e));
+
+      const controller = new AbortController();
+      const done = pipeline.run("string utils", { signal: controller.signal });
+      setTimeout(() => controller.abort(new Error("stop")), 40);
+
+      const records = await done; // must resolve, not hang
+      expect(records).toHaveLength(5);
+      expect(events.some((e) => e.type === "pipeline.cancelled")).toBe(true);
+      expect(events.some((e) => e.type === "pipeline.done")).toBe(true);
+      // Cancelled items are sinked as failed with a "cancelled" marker.
+      const cancelled = records.filter((r) => !r.passed && r.lastError === "cancelled");
+      expect(cancelled.length).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+    }
+  }, 120_000);
+
   it("writes passing modules to workspace/output", async () => {
     const { dir, cleanup } = await tmpWorkspace();
     try {
