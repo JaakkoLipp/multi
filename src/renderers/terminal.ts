@@ -25,6 +25,7 @@ export interface ViewState {
   passed: number;
   failed: number;
   reworks: number;
+  blocked: number;
   busyMs: number;
   cancelled: boolean;
   stages: Record<Stage, StageView>;
@@ -38,6 +39,7 @@ export function emptyState(): ViewState {
     passed: 0,
     failed: 0,
     reworks: 0,
+    blocked: 0,
     busyMs: 0,
     cancelled: false,
     stages: {
@@ -57,6 +59,13 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
     case "wbs.created":
       state.total = e.items.length;
       note(state, `WBS created: ${e.items.length} items`);
+      break;
+    case "item.blocked":
+      state.blocked += 1;
+      break;
+    case "item.unblocked":
+      if (state.blocked > 0) state.blocked -= 1;
+      note(state, `${e.itemId} unblocked`);
       break;
     case "item.enqueued":
       state.stages[e.stage].depth = e.queueDepth;
@@ -112,6 +121,7 @@ function render(state: ViewState): string {
     `${pc.green(String(state.passed))} pass ${pc.red(String(state.failed))} fail` +
     pc.dim("  ·  ") +
     `reworks ${pc.yellow(String(state.reworks))}` +
+    (state.blocked > 0 ? pc.dim("  ·  ") + `blocked ${pc.yellow(String(state.blocked))}` : "") +
     pc.dim("  ·  ") +
     `busy ${pc.bold(`${(state.busyMs / 1000).toFixed(1)}s`)}` +
     (state.cancelled ? pc.dim("  ·  ") + pc.yellow("CANCELLED") : "");

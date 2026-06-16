@@ -22,6 +22,10 @@ function format(e: PipelineEvent): string {
       return `[pipeline] started ${e.runId} — "${e.prompt}"`;
     case "wbs.created":
       return `[wbs] created ${e.items.length} items: ${e.items.map((i) => i.id).join(", ")}`;
+    case "item.blocked":
+      return `[block] ${e.itemId} waiting on ${e.dependsOn.join(", ")}`;
+    case "item.unblocked":
+      return `[ready] ${e.itemId} dependencies satisfied`;
     case "item.enqueued":
       return `[enqueue] ${e.itemId} -> ${e.stage} (depth ${e.queueDepth})`;
     case "item.started":

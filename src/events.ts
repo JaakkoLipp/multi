@@ -15,6 +15,8 @@ import type { FinalRecord, Stage, WorkItem } from "./contracts.js";
 export type PipelineEvent =
   | { type: "pipeline.started"; runId: string; prompt: string; startedAt: number }
   | { type: "wbs.created"; items: WorkItem[] }
+  | { type: "item.blocked"; itemId: string; dependsOn: string[] }
+  | { type: "item.unblocked"; itemId: string }
   | { type: "item.enqueued"; stage: Stage; itemId: string; queueDepth: number }
   | { type: "item.started"; stage: Stage; itemId: string; worker: number }
   | { type: "item.completed"; stage: Stage; itemId: string; worker: number }

@@ -20,6 +20,8 @@ export const WorkItem = z.object({
   title: z.string(),
   description: z.string(),
   acceptanceCriteria: z.array(z.string()),
+  /** Ids of work items this one builds upon. Empty = independent (a DAG root). */
+  dependsOn: z.array(z.string()).default([]),
 });
 export type WorkItem = z.infer<typeof WorkItem>;
 
@@ -72,9 +74,15 @@ export const WbsOutput = z.object({
   items: z
     .array(
       z.object({
+        /** A short stable handle the model uses to express dependencies between
+         * items (ids are assigned by the engine, so the model can't reference
+         * them yet). Optional: omit for fully independent work. */
+        key: z.string().optional(),
         title: z.string(),
         description: z.string(),
         acceptanceCriteria: z.array(z.string()),
+        /** Keys of other items this one depends on. */
+        dependsOn: z.array(z.string()).default([]),
       }),
     )
     .min(1),

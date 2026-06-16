@@ -13,8 +13,18 @@ import type {
   WorkItem,
 } from "../contracts.js";
 
+/** Design specs of the items this one depends on (already designed & passed),
+ * provided as building-block context. Empty for DAG roots. */
+export type DependencyContext = DesignSpec[];
+
+export interface DesignInput {
+  item: WorkItem;
+  dependencies: DependencyContext;
+}
+
 export interface DevelopInput {
   spec: DesignSpec;
+  dependencies: DependencyContext;
   /** Present only on rework: the previous attempt's source + failing-test feedback. */
   previousCode: string | null;
   feedback: string | null;
@@ -31,7 +41,7 @@ export interface WriteTestsInput {
 
 export interface Agents {
   orchestrate(prompt: string, maxItems: number): Promise<WbsOutput>;
-  design(item: WorkItem): Promise<DesignOutput>;
+  design(input: DesignInput): Promise<DesignOutput>;
   develop(input: DevelopInput): Promise<CodeOutput>;
   writeTests(input: WriteTestsInput): Promise<TestOutput>;
 }

@@ -20,7 +20,7 @@ import type {
   WorkItem,
 } from "../contracts.js";
 import { SOURCE_IMPORT } from "../sandbox.js";
-import type { Agents, DevelopInput, WriteTestsInput } from "./types.js";
+import type { Agents, DesignInput, DevelopInput, WriteTestsInput } from "./types.js";
 
 interface FnSpec {
   name: string;
@@ -145,11 +145,12 @@ export function createStubAgents(): Agents {
           title: `${f.name} utility`,
           description: `Implement ${f.signature}. ${f.behavior}`,
           acceptanceCriteria: f.edgeCases.map((e) => `Handle: ${e}`),
+          dependsOn: [] as string[],
         }));
       return { items };
     },
 
-    async design(item: WorkItem): Promise<DesignOutput> {
+    async design({ item }: DesignInput): Promise<DesignOutput> {
       const f = fnForItem(item);
       return {
         functionName: f.name,

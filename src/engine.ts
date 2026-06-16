@@ -105,20 +105,58 @@ async function runPipeline(
 
   emit({ type: "pipeline.started", runId, prompt, startedAt: Date.now() });
 
-  // --- WBS ------------------------------------------------------------------
+  // --- WBS + dependency graph ----------------------------------------------
   const wbs = await agents.orchestrate(prompt, config.maxWbsItems);
-  const items: WorkItem[] = wbs.items.slice(0, config.maxWbsItems).map((raw, i) => ({
-    id: `wi-${String(i + 1).padStart(3, "0")}`,
-    title: raw.title,
-    description: raw.description,
-    acceptanceCriteria: raw.acceptanceCriteria,
-  }));
+  const raws = wbs.items.slice(0, config.maxWbsItems);
+  const ids = raws.map((_, i) => `wi-${String(i + 1).padStart(3, "0")}`);
+  // The model expresses dependencies by `key`; map those to the ids we assign.
+  const keyToId = new Map<string, string>();
+  raws.forEach((raw, i) => {
+    if (raw.key) keyToId.set(raw.key, ids[i]!);
+  });
+  const items: WorkItem[] = raws.map((raw, i) => {
+    const self = ids[i]!;
+    const deps = Array.from(
+      new Set(
+        (raw.dependsOn ?? [])
+          .map((k) => keyToId.get(k))
+          .filter((id): id is string => id !== undefined && id !== self),
+      ),
+    );
+    return {
+      id: self,
+      title: raw.title,
+      description: raw.description,
+      acceptanceCriteria: raw.acceptanceCriteria,
+      dependsOn: deps,
+    };
+  });
+
+  const itemsById = new Map(items.map((it) => [it.id, it]));
+  assertAcyclic(items); // fail fast on a malformed (cyclic) graph
+
+  const dependents = new Map<string, string[]>(); // depId -> ids that need it
+  const unmet = new Map<string, number>(); // itemId -> deps not yet passed
+  const designSpecs = new Map<string, DesignSpec>(); // itemId -> its design (for context)
   for (const item of items) {
     states.set(item.id, { attempts: 0, passed: false, sourceCode: null, testSource: null, lastError: null });
+    unmet.set(item.id, item.dependsOn.length);
+    for (const dep of item.dependsOn) {
+      (dependents.get(dep) ?? dependents.set(dep, []).get(dep)!).push(item.id);
+    }
   }
   emit({ type: "wbs.created", items });
 
   const latch = new CompletionLatch(items.length);
+
+  const enqueueDesigner = (item: WorkItem) => {
+    designerQueue.push(item);
+    emit({ type: "item.enqueued", stage: "designer", itemId: item.id, queueDepth: designerQueue.depth });
+  };
+
+  // Building-block context for a dependent: the design specs of its passed deps.
+  const dependencyContextFor = (item: WorkItem): DesignSpec[] =>
+    item.dependsOn.map((d) => designSpecs.get(d)).filter((s): s is DesignSpec => s !== undefined);
 
   const finalize = (item: WorkItem) => {
     if (records.has(item.id)) return; // idempotent
@@ -134,6 +172,26 @@ async function runPipeline(
     records.set(item.id, record);
     emit({ type: "item.finalized", record });
     latch.settleOne();
+
+    // Propagate to dependents: admit those now unblocked, cascade-fail those
+    // whose dependency did not pass (they can never run).
+    for (const depId of dependents.get(item.id) ?? []) {
+      if (records.has(depId)) continue;
+      const dependent = itemsById.get(depId)!;
+      if (s.passed) {
+        const remaining = unmet.get(depId)! - 1;
+        unmet.set(depId, remaining);
+        if (remaining === 0 && !cancelled) {
+          emit({ type: "item.unblocked", itemId: depId });
+          enqueueDesigner(dependent);
+        }
+      } else {
+        const ds = states.get(depId)!;
+        ds.lastError = `blocked: dependency ${item.id} did not pass`;
+        emit({ type: "item.failed", itemId: depId, stage: "designer", error: ds.lastError });
+        finalize(dependent); // recurses to cascade further
+      }
+    }
   };
 
   // --- Cancellation ---------------------------------------------------------
@@ -184,9 +242,12 @@ async function runPipeline(
       if (cancelled) return;
       emit({ type: "item.started", stage: "designer", itemId: item.id, worker });
       try {
-        const out = await timed("designer", item.id, 1, () => agents.design(item));
+        const out = await timed("designer", item.id, 1, () =>
+          agents.design({ item, dependencies: dependencyContextFor(item) }),
+        );
         if (cancelled) return;
         const spec: DesignSpec = { workItemId: item.id, ...out };
+        designSpecs.set(item.id, spec);
         emit({ type: "item.completed", stage: "designer", itemId: item.id, worker });
         developerQueue.push({ item, spec, attempt: 1, previousCode: null, feedback: null });
         emit({ type: "item.enqueued", stage: "developer", itemId: item.id, queueDepth: developerQueue.depth });
@@ -211,6 +272,7 @@ async function runPipeline(
         const out = await timed("developer", item.id, job.attempt, () =>
           agents.develop({
             spec: job.spec,
+            dependencies: dependencyContextFor(item),
             previousCode: job.previousCode,
             feedback: job.feedback,
             attempt: job.attempt,
@@ -314,9 +376,11 @@ async function runPipeline(
   if (signal?.aborted) onAbort();
 
   if (!cancelled) {
+    // Admit only DAG roots; dependents are enqueued by finalize() as their
+    // dependencies pass (or cascade-failed if a dependency does not).
     for (const item of items) {
-      designerQueue.push(item);
-      emit({ type: "item.enqueued", stage: "designer", itemId: item.id, queueDepth: designerQueue.depth });
+      if (item.dependsOn.length === 0) enqueueDesigner(item);
+      else emit({ type: "item.blocked", itemId: item.id, dependsOn: item.dependsOn });
     }
   }
 
@@ -333,6 +397,35 @@ async function runPipeline(
   const finalRecords = items.map((it) => records.get(it.id)!);
   emit({ type: "pipeline.done", records: finalRecords });
   return finalRecords;
+}
+
+/**
+ * Validate the dependency graph is acyclic (Kahn's algorithm). A cycle would
+ * leave items permanently blocked and deadlock the completion latch, so we fail
+ * fast with a clear error rather than hang.
+ */
+function assertAcyclic(items: WorkItem[]): void {
+  const indegree = new Map(items.map((it) => [it.id, it.dependsOn.length]));
+  const dependents = new Map<string, string[]>();
+  for (const it of items) {
+    for (const dep of it.dependsOn) {
+      (dependents.get(dep) ?? dependents.set(dep, []).get(dep)!).push(it.id);
+    }
+  }
+  const queue = items.filter((it) => (indegree.get(it.id) ?? 0) === 0).map((it) => it.id);
+  let processed = 0;
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    processed += 1;
+    for (const dependent of dependents.get(id) ?? []) {
+      const n = (indegree.get(dependent) ?? 0) - 1;
+      indegree.set(dependent, n);
+      if (n === 0) queue.push(dependent);
+    }
+  }
+  if (processed !== items.length) {
+    throw new Error("WBS dependency graph contains a cycle; cannot schedule items");
+  }
 }
 
 function abortReason(signal: AbortSignal | undefined): string {

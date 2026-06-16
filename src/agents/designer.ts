@@ -4,9 +4,10 @@
  */
 import { Agent } from "@mastra/core/agent";
 import type { MastraModelConfig } from "@mastra/core/llm";
-import { DesignOutput, type WorkItem } from "../contracts.js";
+import { DesignOutput } from "../contracts.js";
 import { generateStructured } from "./mastra.js";
 import { DESIGNER_INSTRUCTIONS, renderDesignerPrompt } from "./prompts.js";
+import type { DesignInput } from "./types.js";
 
 export function makeDesigner(model: MastraModelConfig) {
   const agent = new Agent({
@@ -15,6 +16,6 @@ export function makeDesigner(model: MastraModelConfig) {
     instructions: DESIGNER_INSTRUCTIONS,
     model,
   });
-  return (item: WorkItem) =>
-    generateStructured(agent, renderDesignerPrompt(item), DesignOutput);
+  return (input: DesignInput) =>
+    generateStructured(agent, renderDesignerPrompt(input), DesignOutput);
 }

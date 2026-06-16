@@ -19,6 +19,7 @@ const sampleItem: WorkItem = {
   title: "slugify utility",
   description: "Implement slugify",
   acceptanceCriteria: ["empty string"],
+  dependsOn: [],
 };
 
 const sampleRecord: FinalRecord = {
@@ -33,6 +34,8 @@ const sampleRecord: FinalRecord = {
 const samples: Record<PipelineEventType, PipelineEvent> = {
   "pipeline.started": { type: "pipeline.started", runId: "2026-06-16", prompt: "string utils", startedAt: 1750000000000 },
   "wbs.created": { type: "wbs.created", items: [sampleItem] },
+  "item.blocked": { type: "item.blocked", itemId: "wi-002", dependsOn: ["wi-001"] },
+  "item.unblocked": { type: "item.unblocked", itemId: "wi-002" },
   "item.enqueued": { type: "item.enqueued", stage: "designer", itemId: "wi-001", queueDepth: 3 },
   "item.started": { type: "item.started", stage: "developer", itemId: "wi-001", worker: 0 },
   "item.completed": { type: "item.completed", stage: "tester", itemId: "wi-001", worker: 1 },
@@ -64,6 +67,8 @@ describe("PipelineEvent serialization", () => {
     const expected: PipelineEventType[] = [
       "pipeline.started",
       "wbs.created",
+      "item.blocked",
+      "item.unblocked",
       "item.enqueued",
       "item.started",
       "item.completed",
