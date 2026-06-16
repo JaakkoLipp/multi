@@ -1,0 +1,31 @@
+{
+  "name": "agent-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Concurrent multi-agent code-generation pipeline (designer -> developer -> tester) with a headless engine and a typed event stream.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "start": "tsx src/cli.ts",
+    "demo": "tsx src/cli.ts \"Build a TypeScript module string_utils exporting: slugify(text), truncateWords(text, n), countVowels(text), isPalindrome(text), titleCase(text)\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.71",
+    "@mastra/core": "^1.42.0",
+    "ai": "^6.0.206",
+    "log-update": "^8.0.0",
+    "picocolors": "^1.1.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.9"
+  }
+}

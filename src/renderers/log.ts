@@ -1,0 +1,42 @@
+/**
+ * Plain event-log renderer for `--no-ui`.
+ *
+ * Proves the engine is fully headless: it runs the exact same engine and simply
+ * prints each event as a line. Same input (the event stream), different output
+ * surface — exactly like the live view and the future webview.
+ */
+import type { PipelineEvent } from "../events.js";
+
+export function attachLogRenderer(
+  on: (l: (e: PipelineEvent) => void) => () => void,
+): () => void {
+  return on((e) => {
+    // eslint-disable-next-line no-console
+    console.log(format(e));
+  });
+}
+
+function format(e: PipelineEvent): string {
+  switch (e.type) {
+    case "wbs.created":
+      return `[wbs] created ${e.items.length} items: ${e.items.map((i) => i.id).join(", ")}`;
+    case "item.enqueued":
+      return `[enqueue] ${e.itemId} -> ${e.stage} (depth ${e.queueDepth})`;
+    case "item.started":
+      return `[start] ${e.stage} w${e.worker} ${e.itemId}`;
+    case "item.completed":
+      return `[done]  ${e.stage} w${e.worker} ${e.itemId}`;
+    case "item.reworked":
+      return `[rework] ${e.itemId} attempt ${e.attempt}`;
+    case "item.failed":
+      return `[fail]  ${e.stage} ${e.itemId}: ${firstLine(e.error)}`;
+    case "item.finalized":
+      return `[final] ${e.record.workItem.id} ${e.record.passed ? "PASS" : "FAIL"} attempts=${e.record.attempts}`;
+    case "pipeline.done":
+      return `[pipeline] done: ${e.records.filter((r) => r.passed).length}/${e.records.length} passed`;
+  }
+}
+
+function firstLine(s: string): string {
+  return s.split("\n").find((l) => l.trim().length > 0) ?? s;
+}
