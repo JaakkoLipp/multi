@@ -46,6 +46,8 @@ function format(e: PipelineEvent): string {
       return `[final] ${e.record.workItem.id} ${e.record.passed ? "PASS" : "FAIL"} attempts=${e.record.attempts}`;
     case "pipeline.cancelled":
       return `[cancel] ${e.reason}`;
+    case "pipeline.packaged":
+      return `[package] ${e.modules.length} modules -> ${e.dir} (integration ${e.integrationPassed ? "PASS" : "FAIL"})`;
     case "pipeline.done":
       return `[pipeline] done: ${e.records.filter((r) => r.passed).length}/${e.records.length} passed`;
   }

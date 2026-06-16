@@ -99,6 +99,12 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
       state.cancelled = true;
       note(state, pc.yellow(`cancelled: ${e.reason}`));
       break;
+    case "pipeline.packaged":
+      note(
+        state,
+        `packaged ${e.modules.length} modules — integration ${e.integrationPassed ? pc.green("PASS") : pc.red("FAIL")}`,
+      );
+      break;
     case "item.finalized":
       state.done += 1;
       if (e.record.passed) state.passed += 1;

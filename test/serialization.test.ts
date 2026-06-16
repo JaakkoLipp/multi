@@ -46,6 +46,7 @@ const samples: Record<PipelineEventType, PipelineEvent> = {
   "item.metrics": { type: "item.metrics", stage: "developer", itemId: "wi-001", attempt: 1, durationMs: 42 },
   "item.finalized": { type: "item.finalized", record: sampleRecord },
   "pipeline.cancelled": { type: "pipeline.cancelled", reason: "interrupted by user (SIGINT)" },
+  "pipeline.packaged": { type: "pipeline.packaged", dir: "/tmp/pkg", modules: ["slugify"], integrationPassed: true },
   "pipeline.done": { type: "pipeline.done", records: [sampleRecord] },
 };
 
@@ -81,6 +82,7 @@ describe("PipelineEvent serialization", () => {
       "item.metrics",
       "item.finalized",
       "pipeline.cancelled",
+      "pipeline.packaged",
       "pipeline.done",
     ];
     expect(Object.keys(samples).sort()).toEqual([...expected].sort());

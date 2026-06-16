@@ -41,6 +41,12 @@ const ConfigSchema = z.object({
     // rejections reuse the rework edge. Off by default.
     enabled: z.boolean(),
   }),
+  packaging: z.object({
+    // After the sink, assemble passing modules into one consumable library and
+    // run a cross-module integration test. Off by default.
+    enabled: z.boolean(),
+    name: z.string().min(1),
+  }),
   gates: z.object({
     // Quality gates run after unit tests pass; a failing gate routes the item
     // back to the developer as feedback (bounded by the rework cap). Default off
@@ -83,6 +89,10 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
     },
     review: {
       enabled: boolFromEnv(env.REVIEW_ENABLED, false),
+    },
+    packaging: {
+      enabled: boolFromEnv(env.PACKAGE_ENABLED, false),
+      name: env.PACKAGE_NAME ?? "generated-utils",
     },
     gates: {
       typecheck: boolFromEnv(env.GATE_TYPECHECK, false),

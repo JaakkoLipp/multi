@@ -21,6 +21,7 @@ import {
   type WorkItem,
 } from "./contracts.js";
 import { EventBus, type EventListener, type PipelineEvent } from "./events.js";
+import { assemblePackage } from "./packager.js";
 import { AsyncQueue, CompletionLatch, WorkerPool } from "./queue.js";
 import {
   lintModule,
@@ -460,6 +461,30 @@ async function runPipeline(
   await Promise.all([designerPool.drained(), developerPool.drained(), testerPool.drained()]);
 
   const finalRecords = items.map((it) => records.get(it.id)!);
+
+  // Integration & packaging: assemble the passing modules into one library and
+  // run a cross-module integration test. Skipped when cancelled.
+  if (config.packaging.enabled && !cancelled) {
+    const modules = finalRecords
+      .filter((r) => r.passed && r.sourceCode !== null)
+      .map((r) => ({
+        functionName: designSpecs.get(r.workItem.id)?.functionName ?? r.workItem.id,
+        sourceCode: r.sourceCode!,
+      }));
+    try {
+      const pkg = await assemblePackage({
+        outDir: path.join(outputDir, "package"),
+        name: config.packaging.name,
+        modules,
+        timeoutMs: config.testTimeoutMs,
+      });
+      emit({ type: "pipeline.packaged", dir: pkg.dir, modules: pkg.modules, integrationPassed: pkg.integrationPassed });
+    } catch (err) {
+      emit({ type: "pipeline.packaged", dir: path.join(outputDir, "package"), modules: [], integrationPassed: false });
+      void errorMessage(err);
+    }
+  }
+
   emit({ type: "pipeline.done", records: finalRecords });
   return finalRecords;
 }

@@ -163,6 +163,14 @@ design and is fully tested against deterministic stubs.
   failing on subjective critique alone, an exhausted review budget falls through
   to the tester, which stays the ground-truth arbiter.
 
+- **Integration & packaging.** After the sink, passing modules are assembled into
+  a single library (barrel + package.json + README) and a generated integration
+  test imports the barrel and runs — the cross-module check (no name collisions,
+  all importable together) that per-item unit tests structurally cannot make.
+  This is where modules are wired together for real, complementing the DAG's
+  scheduling-level dependencies. Emitted as pipeline.packaged before
+  pipeline.done; off by default (`--package`).
+
 ## Out of scope (per §11)
 
 No VS Code extension/webview, persistence, distributed queues, auth, HITL, or

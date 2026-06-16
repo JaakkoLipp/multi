@@ -36,6 +36,7 @@ interface Cli {
   json: boolean;
   gates: string | null;
   review: boolean;
+  pkg: boolean;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -50,6 +51,7 @@ function parseArgs(argv: string[]): Cli {
   let speed = 120;
   let gates: string | null = null;
   let review = false;
+  let pkg = false;
 
   const valueOf = (arg: string, i: number): { value: string | null; next: number } => {
     const eq = arg.indexOf("=");
@@ -71,6 +73,7 @@ function parseArgs(argv: string[]): Cli {
       case "--stub": stub = true; break;
       case "--serve": serve = true; break;
       case "--review": review = true; break;
+      case "--package": pkg = true; break;
       case "--json": json = true; noUi = true; break;
       case "--record": {
         const { value, next } = valueOf(arg, i);
@@ -108,7 +111,7 @@ function parseArgs(argv: string[]): Cli {
 
   return {
     prompt: positionals.join(" ").trim(),
-    noUi, stub, serve, record, replayFile, port, speed, json, gates, review,
+    noUi, stub, serve, record, replayFile, port, speed, json, gates, review, pkg,
   };
 }
 
@@ -133,6 +136,7 @@ function usage(): never {
       `  --json          machine-readable {summary, records} to stdout (implies --no-ui)\n` +
       `  --gates [list]  quality gates after tests (default typecheck,lint,coverage)\n` +
       `  --review        critic reviews code before testing (rejections rework)\n` +
+      `  --package       assemble passing modules into a library + integration test\n` +
       `  --replay <file> re-draw a recorded run with NO engine (proves the renderer seam)`,
   );
   process.exit(2);
@@ -164,6 +168,7 @@ async function main(): Promise<void> {
     config.gates.coverage = set.has("coverage");
   }
   if (cli.review) config.review.enabled = true;
+  if (cli.pkg) config.packaging.enabled = true;
   const workspaceDir = path.resolve("workspace");
 
   let agents: Agents;

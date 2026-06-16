@@ -111,6 +111,7 @@ fully local / EU-sovereign setup works.
 | `src/sandbox.ts` | write + run generated specs in isolation + import allowlist (D3) |
 | `src/llm.ts` | AI-SDK provider bound to LiteLLM + `generateObject` helper |
 | `src/metrics.ts` | pure `summarize(events)` fold → run summary / aggregate metrics |
+| `src/packager.ts` | integration & packaging stage: assemble passing modules into a library |
 | `src/agents/*` | orchestrator / designer / developer / tester (Mastra) + stubs; one structured-output repair retry |
 | `src/engine.ts` | headless: wires queues + workers, emits events, cancellation, awaits completion |
 | `src/renderers/*` | `terminal.ts`, `log.ts`, `recorder.ts` (NDJSON record/replay), `sse.ts` — subscribers only |
@@ -150,6 +151,11 @@ stub agents with **real** Vitest execution, including the dev↔tester rework lo
   coverage threshold. A failing gate routes the item back to the developer with
   the gate output as feedback. Enable with `--gates` or `GATE_*` env vars; each
   is surfaced as an `item.gate` event. Off by default.
+- **Integration & packaging.** With `--package` (or `PACKAGE_ENABLED`), after the
+  sink the passing modules are assembled into one consumable library — a barrel
+  `index.ts`, `package.json`, `README.md` under `workspace/output/package/` — and
+  a generated cross-module integration test is executed. Result surfaces as a
+  `pipeline.packaged` event.
 - **Review loop.** With `--review` (or `REVIEW_ENABLED`), a critic reviews the
   developer's code against the spec/acceptance criteria *before* testing; a
   rejection reuses the rework edge (no extra queue) and surfaces as an

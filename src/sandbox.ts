@@ -227,3 +227,27 @@ export function typecheckModule(dir: string, timeoutMs: number): Promise<GateRes
 export function lintModule(dir: string, timeoutMs: number): Promise<GateResult> {
   return runBin(eslintBin, ["--config", eslintConfig, SOURCE_FILE], dir, timeoutMs);
 }
+
+/**
+ * Run vitest over an already-materialized directory that contains its own
+ * `vitest.config.ts` (used by the integration/packaging stage). Returns the
+ * pass/fail verdict and combined output.
+ */
+export function runVitest(dir: string, timeoutMs: number): Promise<{ passed: boolean; output: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      vitestBin,
+      ["run", "--root", dir, "--no-color", "--config", path.join(dir, "vitest.config.ts")],
+      {
+        cwd: dir,
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, CI: "true", FORCE_COLOR: "0" },
+      },
+      (error, stdout, stderr) => {
+        resolve({ passed: !error, output: `${stdout ?? ""}${stderr ?? ""}` });
+      },
+    );
+  });
+}

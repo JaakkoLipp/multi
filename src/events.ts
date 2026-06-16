@@ -33,6 +33,7 @@ export type PipelineEvent =
   | { type: "item.metrics"; stage: Stage; itemId: string; attempt: number; durationMs: number }
   | { type: "item.finalized"; record: FinalRecord }
   | { type: "pipeline.cancelled"; reason: string }
+  | { type: "pipeline.packaged"; dir: string; modules: string[]; integrationPassed: boolean }
   | { type: "pipeline.done"; records: FinalRecord[] };
 
 export type PipelineEventType = PipelineEvent["type"];
