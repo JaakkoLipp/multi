@@ -32,6 +32,11 @@ export type PipelineEvent =
   | { type: "item.failed"; itemId: string; stage: Stage; error: string }
   | { type: "item.metrics"; stage: Stage; itemId: string; attempt: number; durationMs: number }
   | { type: "item.finalized"; record: FinalRecord }
+  | { type: "pipeline.paused"; at: number }
+  | { type: "pipeline.resumed"; at: number }
+  | { type: "item.skipped"; itemId: string; reason: string }
+  | { type: "item.retry.accepted"; itemId: string; attempt: number }
+  | { type: "command.rejected"; command: string; itemId: string | null; reason: string }
   | { type: "pipeline.cancelled"; reason: string }
   | { type: "pipeline.packaged"; dir: string; modules: string[]; integrationPassed: boolean }
   | { type: "pipeline.done"; records: FinalRecord[] };

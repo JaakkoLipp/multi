@@ -19,6 +19,7 @@ const ENGINE_FILES = [
   "src/sandbox.ts",
   "src/events.ts",
   "src/contracts.ts",
+  "src/commands.ts",
   "src/llm.ts",
   "src/agents/types.ts",
   "src/agents/prompts.ts",

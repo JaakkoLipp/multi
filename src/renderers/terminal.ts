@@ -28,6 +28,7 @@ export interface ViewState {
   blocked: number;
   busyMs: number;
   cancelled: boolean;
+  paused: boolean;
   stages: Record<Stage, StageView>;
   lastEvents: string[];
 }
@@ -42,6 +43,7 @@ export function emptyState(): ViewState {
     blocked: 0,
     busyMs: 0,
     cancelled: false,
+    paused: false,
     stages: {
       designer: { depth: 0, active: new Set() },
       developer: { depth: 0, active: new Set() },
@@ -114,6 +116,26 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
         `${e.record.workItem.id} ${e.record.passed ? pc.green("PASS") : pc.red("FAIL")} (${e.record.attempts} attempt${e.record.attempts === 1 ? "" : "s"})`,
       );
       break;
+    case "pipeline.paused":
+      state.paused = true;
+      note(state, pc.yellow("pipeline paused"));
+      break;
+    case "pipeline.resumed":
+      state.paused = false;
+      note(state, pc.green("pipeline resumed"));
+      break;
+    case "item.skipped":
+      state.stages.designer.active.delete(e.itemId);
+      state.stages.developer.active.delete(e.itemId);
+      state.stages.tester.active.delete(e.itemId);
+      note(state, `${e.itemId} ${pc.yellow("skipped")}`);
+      break;
+    case "item.retry.accepted":
+      note(state, `${e.itemId} retry (attempt ${e.attempt})`);
+      break;
+    case "command.rejected":
+      note(state, pc.dim(`command ${e.command} rejected: ${e.reason}`));
+      break;
     case "pipeline.done":
       break;
   }
@@ -136,6 +158,7 @@ function render(state: ViewState): string {
     (state.blocked > 0 ? pc.dim("  ·  ") + `blocked ${pc.yellow(String(state.blocked))}` : "") +
     pc.dim("  ·  ") +
     `busy ${pc.bold(`${(state.busyMs / 1000).toFixed(1)}s`)}` +
+    (state.paused ? pc.dim("  ·  ") + pc.yellow("PAUSED") : "") +
     (state.cancelled ? pc.dim("  ·  ") + pc.yellow("CANCELLED") : "");
 
   const rows = STAGES.map((stage) => {

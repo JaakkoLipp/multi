@@ -44,6 +44,16 @@ function format(e: PipelineEvent): string {
       return `[time]  ${e.stage} ${e.itemId} a${e.attempt} ${e.durationMs}ms`;
     case "item.finalized":
       return `[final] ${e.record.workItem.id} ${e.record.passed ? "PASS" : "FAIL"} attempts=${e.record.attempts}`;
+    case "pipeline.paused":
+      return `[pause]  pipeline paused`;
+    case "pipeline.resumed":
+      return `[resume] pipeline resumed`;
+    case "item.skipped":
+      return `[skip]  ${e.itemId}: ${e.reason}`;
+    case "item.retry.accepted":
+      return `[retry] ${e.itemId} attempt ${e.attempt}`;
+    case "command.rejected":
+      return `[reject] ${e.command}${e.itemId ? ` ${e.itemId}` : ""}: ${e.reason}`;
     case "pipeline.cancelled":
       return `[cancel] ${e.reason}`;
     case "pipeline.packaged":

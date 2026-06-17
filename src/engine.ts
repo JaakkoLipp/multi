@@ -20,6 +20,7 @@ import {
   type Stage,
   type WorkItem,
 } from "./contracts.js";
+import { CommandBus, type PipelineCommand } from "./commands.js";
 import { EventBus, type EventListener, type PipelineEvent } from "./events.js";
 import { assemblePackage } from "./packager.js";
 import { AsyncQueue, CompletionLatch, WorkerPool } from "./queue.js";
@@ -38,6 +39,9 @@ export interface CreatePipelineOptions {
   agents: Agents;
   /** Where run artifacts + passing output are written. Defaults to ./workspace. */
   workspaceDir?: string;
+  /** Inbound command channel. If omitted, the engine creates its own (reachable
+   * via pipeline.send). Pass one to wire commands before run() starts. */
+  commands?: CommandBus;
 }
 
 export interface RunOptions {
@@ -52,6 +56,8 @@ export interface Pipeline {
   on(listener: EventListener): () => void;
   /** Async-iterable view of the same stream. */
   events(): AsyncGenerator<PipelineEvent>;
+  /** Send a control command into a running pipeline (mirror of `on`). */
+  send(command: PipelineCommand): void;
 }
 
 interface DevJob {
@@ -80,11 +86,13 @@ export function createPipeline(options: CreatePipelineOptions): Pipeline {
   const { config, agents } = options;
   const workspaceDir = options.workspaceDir ?? path.resolve("workspace");
   const bus = new EventBus();
+  const commands = options.commands ?? new CommandBus();
 
   return {
     on: (l) => bus.on(l),
     events: () => bus.events(),
-    run: (prompt, opts) => runPipeline({ config, agents, workspaceDir, bus }, prompt, opts),
+    send: (cmd) => commands.send(cmd),
+    run: (prompt, opts) => runPipeline({ config, agents, workspaceDir, bus, commands }, prompt, opts),
   };
 }
 
@@ -94,11 +102,12 @@ async function runPipeline(
     agents: Agents;
     workspaceDir: string;
     bus: EventBus;
+    commands: CommandBus;
   },
   prompt: string,
   opts: RunOptions = {},
 ): Promise<FinalRecord[]> {
-  const { config, agents, workspaceDir, bus } = ctx;
+  const { config, agents, workspaceDir, bus, commands } = ctx;
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
   const runDir = path.join(workspaceDir, "runs", runId);
   const outputDir = path.join(workspaceDir, "output");
@@ -208,10 +217,10 @@ async function runPipeline(
   // cancelled. That settles the latch, so run() resolves cleanly with records.
   const { signal } = opts;
   let cancelled = false;
-  const onAbort = () => {
+  const cancelRun = (reason: string) => {
     if (cancelled) return;
     cancelled = true;
-    emit({ type: "pipeline.cancelled", reason: abortReason(signal) });
+    emit({ type: "pipeline.cancelled", reason });
     for (const item of items) {
       if (records.has(item.id)) continue;
       const s = states.get(item.id)!;
@@ -219,7 +228,25 @@ async function runPipeline(
       finalize(item);
     }
   };
+  const onAbort = () => cancelRun(abortReason(signal));
   signal?.addEventListener("abort", onAbort, { once: true });
+
+  // Inbound command channel. Phase 0 wires run.cancel (behaviourally identical to
+  // the AbortSignal path); other commands are acknowledged as rejected for now so
+  // the serializable contract exists end to end.
+  const dispatchCommand = (cmd: PipelineCommand) => {
+    switch (cmd.type) {
+      case "run.cancel":
+        cancelRun(cmd.reason || "cancelled by command");
+        break;
+      default: {
+        const itemId = "itemId" in cmd ? cmd.itemId : null;
+        emit({ type: "command.rejected", command: cmd.type, itemId, reason: "not supported yet" });
+        break;
+      }
+    }
+  };
+  const offCommand = commands.onCommand(dispatchCommand);
 
   // Time one stage's processing and emit an item.metrics event.
   const timed = async <T>(
@@ -452,6 +479,7 @@ async function runPipeline(
 
   await latch.done;
   signal?.removeEventListener("abort", onAbort);
+  offCommand();
 
   // Every item is terminal: no worker is mid-flight and nothing will be pushed
   // again, so closing the queues just releases the idle pulls cleanly.
