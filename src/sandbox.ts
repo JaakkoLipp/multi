@@ -185,6 +185,72 @@ async function readCoverage(dir: string): Promise<number | null> {
   }
 }
 
+// --- Generic command runner --------------------------------------------------
+//
+// The shared subprocess primitive: run an arbitrary command in a directory with
+// a hard timeout and cooperative abort. The gate runners below and (in repo mode)
+// the tester running a repository's OWN `npm test`/lint/build are expressed on
+// top of this. SECURITY: in repo mode this executes untrusted repository lifecycle
+// scripts — strictly more powerful than running generated unit tests. Trusted
+// local use only (see the module header).
+
+export interface CommandRun {
+  command: string;
+  args: string[];
+  cwd: string;
+  passed: boolean;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  durationMs: number;
+}
+
+export interface RunCommandArgs {
+  cwd: string;
+  command: string;
+  args: string[];
+  timeoutMs: number;
+  signal?: AbortSignal;
+  env?: Record<string, string>;
+}
+
+export function runCommand(args: RunCommandArgs): Promise<CommandRun> {
+  const { cwd, command, args: argv, timeoutMs, signal, env } = args;
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      argv,
+      {
+        cwd,
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, CI: "true", FORCE_COLOR: "0", ...env },
+        signal,
+      },
+      (error, stdout, stderr) => {
+        const err = error as (NodeJS.ErrnoException & { killed?: boolean }) | null;
+        const aborted = Boolean(signal?.aborted);
+        const timedOut = Boolean(err?.killed) && !aborted;
+        const exitCode = err && typeof err.code === "number" ? err.code : error ? null : 0;
+        resolve({
+          command,
+          args: argv,
+          cwd,
+          passed: !error,
+          exitCode,
+          stdout: stdout ?? "",
+          stderr: stderr ?? "",
+          timedOut,
+          durationMs: Date.now() - startedAt,
+        });
+      },
+    );
+  });
+}
+
 // --- Quality gates (run after unit tests pass) -------------------------------
 
 export interface GateResult {
@@ -196,17 +262,9 @@ const tscBin = path.join(projectRoot, "node_modules", ".bin", process.platform =
 const eslintBin = path.join(projectRoot, "node_modules", ".bin", process.platform === "win32" ? "eslint.cmd" : "eslint");
 const eslintConfig = path.join(projectRoot, "eslint.config.mjs");
 
-function runBin(bin: string, bargs: string[], cwd: string, timeoutMs: number): Promise<GateResult> {
-  return new Promise((resolve) => {
-    execFile(
-      bin,
-      bargs,
-      { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, FORCE_COLOR: "0" } },
-      (error, stdout, stderr) => {
-        resolve({ ok: !error, output: `${stdout ?? ""}${stderr ?? ""}`.trim() });
-      },
-    );
-  });
+async function runBin(bin: string, bargs: string[], cwd: string, timeoutMs: number): Promise<GateResult> {
+  const r = await runCommand({ cwd, command: bin, args: bargs, timeoutMs });
+  return { ok: r.passed, output: `${r.stdout}${r.stderr}`.trim() };
 }
 
 /** Type-check the generated module with a strict, standalone tsc invocation. */
@@ -233,21 +291,12 @@ export function lintModule(dir: string, timeoutMs: number): Promise<GateResult> 
  * `vitest.config.ts` (used by the integration/packaging stage). Returns the
  * pass/fail verdict and combined output.
  */
-export function runVitest(dir: string, timeoutMs: number): Promise<{ passed: boolean; output: string }> {
-  return new Promise((resolve) => {
-    execFile(
-      vitestBin,
-      ["run", "--root", dir, "--no-color", "--config", path.join(dir, "vitest.config.ts")],
-      {
-        cwd: dir,
-        timeout: timeoutMs,
-        killSignal: "SIGKILL",
-        maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, CI: "true", FORCE_COLOR: "0" },
-      },
-      (error, stdout, stderr) => {
-        resolve({ passed: !error, output: `${stdout ?? ""}${stderr ?? ""}` });
-      },
-    );
+export async function runVitest(dir: string, timeoutMs: number): Promise<{ passed: boolean; output: string }> {
+  const r = await runCommand({
+    cwd: dir,
+    command: vitestBin,
+    args: ["run", "--root", dir, "--no-color", "--config", path.join(dir, "vitest.config.ts")],
+    timeoutMs,
   });
+  return { passed: r.passed, output: `${r.stdout}${r.stderr}` };
 }
