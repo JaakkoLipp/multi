@@ -185,6 +185,7 @@ async function runPipeline(
       sourceCode: s.sourceCode,
       testSource: s.testSource,
       lastError: s.lastError,
+      patch: null,
     };
     records.set(item.id, record);
     emit({ type: "item.finalized", record });

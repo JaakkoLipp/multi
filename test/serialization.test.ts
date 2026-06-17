@@ -29,6 +29,7 @@ const sampleRecord: FinalRecord = {
   sourceCode: "export const x = 1;",
   testSource: "test code",
   lastError: null,
+  patch: null,
 };
 
 const samples: Record<PipelineEventType, PipelineEvent> = {

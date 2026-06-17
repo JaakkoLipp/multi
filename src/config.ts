@@ -15,6 +15,15 @@ const intFromEnv = (def: number) =>
     .pipe(z.number().int().positive());
 
 const ConfigSchema = z.object({
+  /** "module" generates standalone modules; "repo" edits an existing repository. */
+  mode: z.enum(["module", "repo"]),
+  repo: z.object({
+    source: z.string().nullable(), // git URL or local path to the target repo
+    ref: z.string(), // base branch/commit
+    testCommand: z.string(), // e.g. "npm test" or "node --test"
+    lintCommand: z.string().nullable(),
+    buildCommand: z.string().nullable(),
+  }),
   litellmBaseUrl: z.string().url(),
   litellmApiKey: z.string().min(1),
   models: z.object({
@@ -70,6 +79,14 @@ function boolFromEnv(value: string | undefined, def: boolean): boolean {
 
 export function loadConfig(env: RawEnv = process.env): PipelineConfig {
   const parsed = ConfigSchema.safeParse({
+    mode: env.MODE === "repo" ? "repo" : "module",
+    repo: {
+      source: env.REPO_SOURCE ?? null,
+      ref: env.REPO_REF ?? "main",
+      testCommand: env.REPO_TEST_CMD ?? "npm test",
+      lintCommand: env.REPO_LINT_CMD ?? null,
+      buildCommand: env.REPO_BUILD_CMD ?? null,
+    },
     litellmBaseUrl: env.LITELLM_BASE_URL ?? "http://localhost:4000/v1",
     litellmApiKey: env.LITELLM_API_KEY ?? "sk-nokey",
     models: {

@@ -20,6 +20,7 @@ const ENGINE_FILES = [
   "src/events.ts",
   "src/contracts.ts",
   "src/commands.ts",
+  "src/repo.ts",
   "src/llm.ts",
   "src/agents/types.ts",
   "src/agents/prompts.ts",
