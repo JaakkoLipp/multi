@@ -217,9 +217,28 @@ async function runPipeline(
   // cancelled. That settles the latch, so run() resolves cleanly with records.
   const { signal } = opts;
   let cancelled = false;
+
+  // Pause gate: checked at the top of each stage handler (NOT inside WorkerPool,
+  // which stays untouched). Pausing parks workers that have already pulled an item
+  // *before* they start work; it finalizes nothing and closes no queue, so the
+  // CompletionLatch is simply not yet satisfied — run() stays pending (resumable),
+  // it does not hang as a bug. cancelRun must drain the waiters or a cancel issued
+  // while paused would deadlock parked workers.
+  let paused = false;
+  const resumeWaiters: Array<() => void> = [];
+  const waitWhilePaused = (): Promise<void> => {
+    if (!paused || cancelled) return Promise.resolve();
+    return new Promise<void>((resolve) => resumeWaiters.push(resolve));
+  };
+  const drainResumeWaiters = () => {
+    for (const resolve of resumeWaiters.splice(0)) resolve();
+  };
+
   const cancelRun = (reason: string) => {
     if (cancelled) return;
     cancelled = true;
+    paused = false;
+    drainResumeWaiters(); // wake any parked workers so they observe cancellation
     emit({ type: "pipeline.cancelled", reason });
     for (const item of items) {
       if (records.has(item.id)) continue;
@@ -239,7 +258,35 @@ async function runPipeline(
       case "run.cancel":
         cancelRun(cmd.reason || "cancelled by command");
         break;
+      case "pipeline.pause":
+        if (!paused && !cancelled) {
+          paused = true;
+          emit({ type: "pipeline.paused", at: Date.now() });
+        }
+        break;
+      case "pipeline.resume":
+        if (paused) {
+          paused = false;
+          emit({ type: "pipeline.resumed", at: Date.now() });
+          drainResumeWaiters();
+        }
+        break;
+      case "item.cancel": {
+        const item = itemsById.get(cmd.itemId);
+        if (!item || records.has(cmd.itemId)) {
+          emit({ type: "command.rejected", command: cmd.type, itemId: cmd.itemId, reason: "unknown or already finalized item" });
+          break;
+        }
+        const s = states.get(cmd.itemId)!;
+        if (s.lastError === null) s.lastError = `skipped: ${cmd.reason}`;
+        emit({ type: "item.skipped", itemId: cmd.itemId, reason: cmd.reason });
+        finalize(item); // idempotent; cascades to DAG dependents like any non-pass
+        break;
+      }
       default: {
+        // item.retry / item.reprioritize: acknowledged but not yet supported.
+        // Retry-after-finalize needs a latch +1 / record-eviction protocol, and
+        // the FIFO queue has no priority. Both are documented follow-ups.
         const itemId = "itemId" in cmd ? cmd.itemId : null;
         emit({ type: "command.rejected", command: cmd.type, itemId, reason: "not supported yet" });
         break;
@@ -306,6 +353,8 @@ async function runPipeline(
     config.concurrency.designer,
     async (item, worker) => {
       if (cancelled) return;
+      await waitWhilePaused();
+      if (cancelled) return;
       emit({ type: "item.started", stage: "designer", itemId: item.id, worker });
       try {
         const out = await timed("designer", item.id, 1, () =>
@@ -332,6 +381,8 @@ async function runPipeline(
     config.concurrency.developer,
     async (job, worker) => {
       const { item } = job;
+      if (cancelled) return;
+      await waitWhilePaused();
       if (cancelled) return;
       emit({ type: "item.started", stage: "developer", itemId: item.id, worker });
       try {
@@ -393,6 +444,8 @@ async function runPipeline(
     config.concurrency.tester,
     async (job, worker) => {
       const { item, spec, code } = job;
+      if (cancelled) return;
+      await waitWhilePaused();
       if (cancelled) return;
       emit({ type: "item.started", stage: "tester", itemId: item.id, worker });
       try {
