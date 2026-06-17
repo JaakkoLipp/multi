@@ -107,6 +107,17 @@ export function reduce(state: ViewState, e: PipelineEvent): void {
         `packaged ${e.modules.length} modules — integration ${e.integrationPassed ? pc.green("PASS") : pc.red("FAIL")}`,
       );
       break;
+    case "repo.acquired":
+      note(state, `repo acquired (${e.ref})`);
+      break;
+    case "item.patch.proposed":
+      break;
+    case "item.patch.applied":
+      note(state, `${e.itemId} patched ${e.files.length} file(s)`);
+      break;
+    case "item.command":
+      note(state, `${e.itemId} ${pc.dim(e.command)} ${e.passed ? pc.green("PASS") : pc.red("FAIL")}`);
+      break;
     case "item.finalized":
       state.done += 1;
       if (e.record.passed) state.passed += 1;

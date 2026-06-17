@@ -31,6 +31,8 @@ const ENGINE_FILES = [
   "src/agents/designer.ts",
   "src/agents/developer.ts",
   "src/agents/tester.ts",
+  "src/agents/repo-designer.ts",
+  "src/agents/repo-developer.ts",
 ];
 
 const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [

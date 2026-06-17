@@ -37,6 +37,8 @@ interface Cli {
   gates: string | null;
   review: boolean;
   pkg: boolean;
+  repoSource: string | null;
+  repoTestCmd: string | null;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -52,6 +54,8 @@ function parseArgs(argv: string[]): Cli {
   let gates: string | null = null;
   let review = false;
   let pkg = false;
+  let repoSource: string | null = null;
+  let repoTestCmd: string | null = null;
 
   const valueOf = (arg: string, i: number): { value: string | null; next: number } => {
     const eq = arg.indexOf("=");
@@ -105,6 +109,18 @@ function parseArgs(argv: string[]): Cli {
         i = next;
         break;
       }
+      case "--repo": {
+        const { value, next } = valueOf(arg, i);
+        repoSource = value;
+        i = next;
+        break;
+      }
+      case "--test-cmd": {
+        const { value, next } = valueOf(arg, i);
+        repoTestCmd = value;
+        i = next;
+        break;
+      }
       default: break;
     }
   }
@@ -112,6 +128,7 @@ function parseArgs(argv: string[]): Cli {
   return {
     prompt: positionals.join(" ").trim(),
     noUi, stub, serve, record, replayFile, port, speed, json, gates, review, pkg,
+    repoSource, repoTestCmd,
   };
 }
 
@@ -137,6 +154,8 @@ function usage(): never {
       `  --gates [list]  quality gates after tests (default typecheck,lint,coverage)\n` +
       `  --review        critic reviews code before testing (rejections rework)\n` +
       `  --package       assemble passing modules into a library + integration test\n` +
+      `  --repo <src>    repo mode: edit an existing repo (git URL or local path)\n` +
+      `  --test-cmd <c>  the repo's own test command (repo mode; default npm test)\n` +
       `  --replay <file> re-draw a recorded run with NO engine (proves the renderer seam)`,
   );
   process.exit(2);
@@ -169,6 +188,11 @@ async function main(): Promise<void> {
   }
   if (cli.review) config.review.enabled = true;
   if (cli.pkg) config.packaging.enabled = true;
+  if (cli.repoSource) {
+    config.mode = "repo";
+    config.repo.source = cli.repoSource;
+  }
+  if (cli.repoTestCmd) config.repo.testCommand = cli.repoTestCmd;
   const workspaceDir = path.resolve("workspace");
 
   let agents: Agents;

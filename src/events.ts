@@ -39,6 +39,10 @@ export type PipelineEvent =
   | { type: "command.rejected"; command: string; itemId: string | null; reason: string }
   | { type: "pipeline.cancelled"; reason: string }
   | { type: "pipeline.packaged"; dir: string; modules: string[]; integrationPassed: boolean }
+  | { type: "repo.acquired"; runId: string; root: string; ref: string }
+  | { type: "item.patch.proposed"; itemId: string; attempt: number; files: string[]; summary: string }
+  | { type: "item.patch.applied"; itemId: string; attempt: number; files: string[] }
+  | { type: "item.command"; itemId: string; command: string; passed: boolean; detail: string }
   | { type: "pipeline.done"; records: FinalRecord[] };
 
 export type PipelineEventType = PipelineEvent["type"];

@@ -53,6 +53,10 @@ const samples: Record<PipelineEventType, PipelineEvent> = {
   "command.rejected": { type: "command.rejected", command: "item.retry", itemId: "wi-001", reason: "already finalized" },
   "pipeline.cancelled": { type: "pipeline.cancelled", reason: "interrupted by user (SIGINT)" },
   "pipeline.packaged": { type: "pipeline.packaged", dir: "/tmp/pkg", modules: ["slugify"], integrationPassed: true },
+  "repo.acquired": { type: "repo.acquired", runId: "2026-06-16", root: "/tmp/wc", ref: "main" },
+  "item.patch.proposed": { type: "item.patch.proposed", itemId: "wi-001", attempt: 1, files: ["src.mjs"], summary: "fix add" },
+  "item.patch.applied": { type: "item.patch.applied", itemId: "wi-001", attempt: 1, files: ["src.mjs"] },
+  "item.command": { type: "item.command", itemId: "wi-001", command: "node test.mjs", passed: true, detail: "ok" },
   "pipeline.done": { type: "pipeline.done", records: [sampleRecord] },
 };
 
@@ -94,6 +98,10 @@ describe("PipelineEvent serialization", () => {
       "command.rejected",
       "pipeline.cancelled",
       "pipeline.packaged",
+      "repo.acquired",
+      "item.patch.proposed",
+      "item.patch.applied",
+      "item.command",
       "pipeline.done",
     ];
     expect(Object.keys(samples).sort()).toEqual([...expected].sort());
