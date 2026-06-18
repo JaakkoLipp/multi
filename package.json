@@ -11,6 +11,8 @@
     "dev": "tsx src/cli.ts",
     "start": "tsx src/cli.ts",
     "demo": "tsx src/cli.ts \"Build a TypeScript module string_utils exporting: slugify(text), truncateWords(text, n), countVowels(text), isPalindrome(text), titleCase(text)\"",
+    "setup": "tsx scripts/setup.ts",
+    "check": "tsx scripts/setup.ts --check",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

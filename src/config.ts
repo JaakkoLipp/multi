@@ -20,6 +20,7 @@ const ConfigSchema = z.object({
   repo: z.object({
     source: z.string().nullable(), // git URL or local path to the target repo
     ref: z.string(), // base branch/commit
+    setupCommand: z.string().nullable(), // e.g. "npm ci" — run once per working copy before tests
     testCommand: z.string(), // e.g. "npm test" or "node --test"
     lintCommand: z.string().nullable(),
     buildCommand: z.string().nullable(),
@@ -112,6 +113,7 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
     repo: {
       source: env.REPO_SOURCE ?? null,
       ref: env.REPO_REF ?? "main",
+      setupCommand: env.REPO_SETUP_CMD ?? null,
       testCommand: env.REPO_TEST_CMD ?? "npm test",
       lintCommand: env.REPO_LINT_CMD ?? null,
       buildCommand: env.REPO_BUILD_CMD ?? null,

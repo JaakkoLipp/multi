@@ -43,8 +43,17 @@ prompt
 
 ```bash
 npm install
-cp .env.example .env      # point LITELLM_BASE_URL / *_MODEL at your gateway
+npm run setup             # interactive: configure the LLM + GitHub App, test both, write .env
+#   or: cp .env.example .env  and edit by hand
+npm run check             # re-test the current .env's LLM + GitHub connections
 ```
+
+`npm run setup` walks you through the LLM gateway (base URL, key, model ids) and,
+optionally, a GitHub App (App ID, private-key `.pem`, installation ID, owner/repo)
+and repo-mode commands (`REPO_SETUP_CMD` like `npm ci`, `REPO_TEST_CMD`). It can
+run a live **structured-output round-trip** against your model and **mint a GitHub
+installation token** to confirm both work before a real run, then merges the
+values into `.env` (existing keys + comments preserved).
 
 No gateway needed to explore — `--stub` runs deterministic, LLM-free agents
 through the **real** engine (real Vitest execution, real rework loop, real repo

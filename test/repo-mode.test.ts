@@ -53,6 +53,51 @@ describe("repo execution mode", () => {
     }
   }, 120_000);
 
+  it("runs the setup command (e.g. install) on each working copy before tests", async () => {
+    const { dir, cleanup } = await tmpWorkspace();
+    try {
+      const config = loadConfig({
+        MODE: "repo",
+        REPO_SOURCE: fixture,
+        REPO_SETUP_CMD: "node -e process.exit(0)",
+        REPO_TEST_CMD: "node test.mjs",
+        MAX_WBS_ITEMS: "1",
+        MAX_REWORK_ATTEMPTS: "2",
+      });
+      const pipeline = createPipeline({ config, agents: createStubAgents(), workspaceDir: dir });
+      const events: PipelineEvent[] = [];
+      pipeline.on((e) => events.push(e));
+
+      const records = await pipeline.run("Fix the add() bug");
+      expect(records[0]!.passed).toBe(true);
+      // The setup command was executed and reported as an item.command.
+      expect(
+        events.some((e) => e.type === "item.command" && e.command.startsWith("node -e") && e.passed),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, 120_000);
+
+  it("fails the item when the setup command fails", async () => {
+    const { dir, cleanup } = await tmpWorkspace();
+    try {
+      const config = loadConfig({
+        MODE: "repo",
+        REPO_SOURCE: fixture,
+        REPO_SETUP_CMD: "node -e process.exit(1)",
+        REPO_TEST_CMD: "node test.mjs",
+        MAX_WBS_ITEMS: "1",
+      });
+      const pipeline = createPipeline({ config, agents: createStubAgents(), workspaceDir: dir });
+      const records = await pipeline.run("Fix the add() bug");
+      expect(records[0]!.passed).toBe(false);
+      expect(records[0]!.lastError).toMatch(/setup failed/i);
+    } finally {
+      await cleanup();
+    }
+  }, 120_000);
+
   it("cancels a repo run via command without hanging", async () => {
     const { dir, cleanup } = await tmpWorkspace();
     try {

@@ -800,6 +800,15 @@ async function runRepoPipeline(
       });
       const repo = createRepoContext(root);
       repoContexts.set(item.id, repo);
+      // Install/setup the working copy (e.g. `npm ci`) so the repo's own test
+      // command can run. Done once per per-item copy, before any patch.
+      if (config.repo.setupCommand) {
+        const { command, args } = splitCommand(config.repo.setupCommand);
+        const setup = await runCommand({ cwd: root, command, args, timeoutMs: config.testTimeoutMs, signal });
+        emit({ type: "item.command", itemId: item.id, command: config.repo.setupCommand, passed: setup.passed, detail: firstLines(setup.stderr || setup.stdout) });
+        if (cancelled) return;
+        if (!setup.passed) throw new Error(`repo setup failed: ${firstLines(setup.stderr || setup.stdout)}`);
+      }
       const out = await designRepo({ item, repo });
       if (cancelled) return;
       const spec: RepoDesignSpec = { workItemId: item.id, ...out };
