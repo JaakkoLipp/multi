@@ -15,6 +15,16 @@ const intFromEnv = (def: number) =>
     .pipe(z.number().int().positive());
 
 const ConfigSchema = z.object({
+  /** "module" generates standalone modules; "repo" edits an existing repository. */
+  mode: z.enum(["module", "repo"]),
+  repo: z.object({
+    source: z.string().nullable(), // git URL or local path to the target repo
+    ref: z.string(), // base branch/commit
+    setupCommand: z.string().nullable(), // e.g. "npm ci" — run once per working copy before tests
+    testCommand: z.string(), // e.g. "npm test" or "node --test"
+    lintCommand: z.string().nullable(),
+    buildCommand: z.string().nullable(),
+  }),
   litellmBaseUrl: z.string().url(),
   litellmApiKey: z.string().min(1),
   models: z.object({
@@ -47,6 +57,16 @@ const ConfigSchema = z.object({
     enabled: z.boolean(),
     name: z.string().min(1),
   }),
+  github: z.object({
+    // GitHub App (bot identity) credentials. The app authenticates as an
+    // installation: a short-lived token minted from appId + private key, scoped
+    // to the installation. Never a hard-coded or harness credential.
+    appId: z.string().nullable(),
+    privateKey: z.string().nullable(),
+    installationId: z.number().int().nullable(),
+    owner: z.string().nullable(),
+    repo: z.string().nullable(),
+  }),
   gates: z.object({
     // Quality gates run after unit tests pass; a failing gate routes the item
     // back to the developer as feedback (bounded by the rework cap). Default off
@@ -68,8 +88,36 @@ function boolFromEnv(value: string | undefined, def: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
+/**
+ * Normalize a PEM private key supplied via env. Supports a literal multi-line
+ * PEM, a single line with escaped "\n", or a base64-encoded PEM (common when a
+ * key is stuffed into a single env var/secret).
+ */
+function normalizePem(value: string | undefined): string | null {
+  if (!value || value.trim() === "") return null;
+  if (value.includes("BEGIN") && value.includes("PRIVATE KEY")) {
+    return value.includes("\\n") ? value.replace(/\\n/g, "\n") : value;
+  }
+  try {
+    const decoded = Buffer.from(value, "base64").toString("utf8");
+    if (decoded.includes("BEGIN") && decoded.includes("PRIVATE KEY")) return decoded;
+  } catch {
+    /* fall through */
+  }
+  return value.replace(/\\n/g, "\n");
+}
+
 export function loadConfig(env: RawEnv = process.env): PipelineConfig {
   const parsed = ConfigSchema.safeParse({
+    mode: env.MODE === "repo" ? "repo" : "module",
+    repo: {
+      source: env.REPO_SOURCE ?? null,
+      ref: env.REPO_REF ?? "main",
+      setupCommand: env.REPO_SETUP_CMD ?? null,
+      testCommand: env.REPO_TEST_CMD ?? "npm test",
+      lintCommand: env.REPO_LINT_CMD ?? null,
+      buildCommand: env.REPO_BUILD_CMD ?? null,
+    },
     litellmBaseUrl: env.LITELLM_BASE_URL ?? "http://localhost:4000/v1",
     litellmApiKey: env.LITELLM_API_KEY ?? "sk-nokey",
     models: {
@@ -93,6 +141,16 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
     packaging: {
       enabled: boolFromEnv(env.PACKAGE_ENABLED, false),
       name: env.PACKAGE_NAME ?? "generated-utils",
+    },
+    github: {
+      appId: env.GITHUB_APP_ID ?? null,
+      privateKey: normalizePem(env.GITHUB_PRIVATE_KEY),
+      installationId:
+        env.GITHUB_INSTALLATION_ID && env.GITHUB_INSTALLATION_ID !== ""
+          ? Number(env.GITHUB_INSTALLATION_ID)
+          : null,
+      owner: env.GITHUB_OWNER ?? null,
+      repo: env.GITHUB_REPO ?? null,
     },
     gates: {
       typecheck: boolFromEnv(env.GATE_TYPECHECK, false),

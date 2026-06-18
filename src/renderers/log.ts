@@ -44,10 +44,28 @@ function format(e: PipelineEvent): string {
       return `[time]  ${e.stage} ${e.itemId} a${e.attempt} ${e.durationMs}ms`;
     case "item.finalized":
       return `[final] ${e.record.workItem.id} ${e.record.passed ? "PASS" : "FAIL"} attempts=${e.record.attempts}`;
+    case "pipeline.paused":
+      return `[pause]  pipeline paused`;
+    case "pipeline.resumed":
+      return `[resume] pipeline resumed`;
+    case "item.skipped":
+      return `[skip]  ${e.itemId}: ${e.reason}`;
+    case "item.retry.accepted":
+      return `[retry] ${e.itemId} attempt ${e.attempt}`;
+    case "command.rejected":
+      return `[reject] ${e.command}${e.itemId ? ` ${e.itemId}` : ""}: ${e.reason}`;
     case "pipeline.cancelled":
       return `[cancel] ${e.reason}`;
     case "pipeline.packaged":
       return `[package] ${e.modules.length} modules -> ${e.dir} (integration ${e.integrationPassed ? "PASS" : "FAIL"})`;
+    case "repo.acquired":
+      return `[repo]   acquired ${e.ref} -> ${e.root}`;
+    case "item.patch.proposed":
+      return `[patch]  ${e.itemId} a${e.attempt} proposes ${e.files.length} file(s): ${e.summary}`;
+    case "item.patch.applied":
+      return `[patch]  ${e.itemId} a${e.attempt} applied ${e.files.join(", ")}`;
+    case "item.command":
+      return `[cmd]   ${e.itemId} \`${e.command}\` ${e.passed ? "PASS" : "FAIL"}`;
     case "pipeline.done":
       return `[pipeline] done: ${e.records.filter((r) => r.passed).length}/${e.records.length} passed`;
   }

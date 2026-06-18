@@ -29,6 +29,7 @@ const sampleRecord: FinalRecord = {
   sourceCode: "export const x = 1;",
   testSource: "test code",
   lastError: null,
+  patch: null,
 };
 
 const samples: Record<PipelineEventType, PipelineEvent> = {
@@ -45,8 +46,17 @@ const samples: Record<PipelineEventType, PipelineEvent> = {
   "item.failed": { type: "item.failed", itemId: "wi-001", stage: "tester", error: "nope" },
   "item.metrics": { type: "item.metrics", stage: "developer", itemId: "wi-001", attempt: 1, durationMs: 42 },
   "item.finalized": { type: "item.finalized", record: sampleRecord },
+  "pipeline.paused": { type: "pipeline.paused", at: 1750000000000 },
+  "pipeline.resumed": { type: "pipeline.resumed", at: 1750000000001 },
+  "item.skipped": { type: "item.skipped", itemId: "wi-001", reason: "skipped by user" },
+  "item.retry.accepted": { type: "item.retry.accepted", itemId: "wi-001", attempt: 3 },
+  "command.rejected": { type: "command.rejected", command: "item.retry", itemId: "wi-001", reason: "already finalized" },
   "pipeline.cancelled": { type: "pipeline.cancelled", reason: "interrupted by user (SIGINT)" },
   "pipeline.packaged": { type: "pipeline.packaged", dir: "/tmp/pkg", modules: ["slugify"], integrationPassed: true },
+  "repo.acquired": { type: "repo.acquired", runId: "2026-06-16", root: "/tmp/wc", ref: "main" },
+  "item.patch.proposed": { type: "item.patch.proposed", itemId: "wi-001", attempt: 1, files: ["src.mjs"], summary: "fix add" },
+  "item.patch.applied": { type: "item.patch.applied", itemId: "wi-001", attempt: 1, files: ["src.mjs"] },
+  "item.command": { type: "item.command", itemId: "wi-001", command: "node test.mjs", passed: true, detail: "ok" },
   "pipeline.done": { type: "pipeline.done", records: [sampleRecord] },
 };
 
@@ -81,8 +91,17 @@ describe("PipelineEvent serialization", () => {
       "item.failed",
       "item.metrics",
       "item.finalized",
+      "pipeline.paused",
+      "pipeline.resumed",
+      "item.skipped",
+      "item.retry.accepted",
+      "command.rejected",
       "pipeline.cancelled",
       "pipeline.packaged",
+      "repo.acquired",
+      "item.patch.proposed",
+      "item.patch.applied",
+      "item.command",
       "pipeline.done",
     ];
     expect(Object.keys(samples).sort()).toEqual([...expected].sort());

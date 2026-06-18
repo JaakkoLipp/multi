@@ -17,14 +17,19 @@ import {
   CodeArtifact,
   type DesignSpec,
   type FinalRecord,
+  type Patch,
+  type RepoDesignSpec,
   type Stage,
   type WorkItem,
 } from "./contracts.js";
+import { CommandBus, type PipelineCommand } from "./commands.js";
 import { EventBus, type EventListener, type PipelineEvent } from "./events.js";
 import { assemblePackage } from "./packager.js";
 import { AsyncQueue, CompletionLatch, WorkerPool } from "./queue.js";
+import { applyEdits, createRepoContext, prepareWorkingCopy, type RepoContext } from "./repo.js";
 import {
   lintModule,
+  runCommand,
   runTests,
   SOURCE_FILE,
   SOURCE_IMPORT,
@@ -38,6 +43,9 @@ export interface CreatePipelineOptions {
   agents: Agents;
   /** Where run artifacts + passing output are written. Defaults to ./workspace. */
   workspaceDir?: string;
+  /** Inbound command channel. If omitted, the engine creates its own (reachable
+   * via pipeline.send). Pass one to wire commands before run() starts. */
+  commands?: CommandBus;
 }
 
 export interface RunOptions {
@@ -52,6 +60,8 @@ export interface Pipeline {
   on(listener: EventListener): () => void;
   /** Async-iterable view of the same stream. */
   events(): AsyncGenerator<PipelineEvent>;
+  /** Send a control command into a running pipeline (mirror of `on`). */
+  send(command: PipelineCommand): void;
 }
 
 interface DevJob {
@@ -80,11 +90,18 @@ export function createPipeline(options: CreatePipelineOptions): Pipeline {
   const { config, agents } = options;
   const workspaceDir = options.workspaceDir ?? path.resolve("workspace");
   const bus = new EventBus();
+  const commands = options.commands ?? new CommandBus();
 
   return {
     on: (l) => bus.on(l),
     events: () => bus.events(),
-    run: (prompt, opts) => runPipeline({ config, agents, workspaceDir, bus }, prompt, opts),
+    send: (cmd) => commands.send(cmd),
+    run: (prompt, opts) => {
+      const ctx = { config, agents, workspaceDir, bus, commands };
+      return config.mode === "repo"
+        ? runRepoPipeline(ctx, prompt, opts)
+        : runPipeline(ctx, prompt, opts);
+    },
   };
 }
 
@@ -94,11 +111,12 @@ async function runPipeline(
     agents: Agents;
     workspaceDir: string;
     bus: EventBus;
+    commands: CommandBus;
   },
   prompt: string,
   opts: RunOptions = {},
 ): Promise<FinalRecord[]> {
-  const { config, agents, workspaceDir, bus } = ctx;
+  const { config, agents, workspaceDir, bus, commands } = ctx;
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
   const runDir = path.join(workspaceDir, "runs", runId);
   const outputDir = path.join(workspaceDir, "output");
@@ -176,6 +194,7 @@ async function runPipeline(
       sourceCode: s.sourceCode,
       testSource: s.testSource,
       lastError: s.lastError,
+      patch: null,
     };
     records.set(item.id, record);
     emit({ type: "item.finalized", record });
@@ -208,10 +227,29 @@ async function runPipeline(
   // cancelled. That settles the latch, so run() resolves cleanly with records.
   const { signal } = opts;
   let cancelled = false;
-  const onAbort = () => {
+
+  // Pause gate: checked at the top of each stage handler (NOT inside WorkerPool,
+  // which stays untouched). Pausing parks workers that have already pulled an item
+  // *before* they start work; it finalizes nothing and closes no queue, so the
+  // CompletionLatch is simply not yet satisfied — run() stays pending (resumable),
+  // it does not hang as a bug. cancelRun must drain the waiters or a cancel issued
+  // while paused would deadlock parked workers.
+  let paused = false;
+  const resumeWaiters: Array<() => void> = [];
+  const waitWhilePaused = (): Promise<void> => {
+    if (!paused || cancelled) return Promise.resolve();
+    return new Promise<void>((resolve) => resumeWaiters.push(resolve));
+  };
+  const drainResumeWaiters = () => {
+    for (const resolve of resumeWaiters.splice(0)) resolve();
+  };
+
+  const cancelRun = (reason: string) => {
     if (cancelled) return;
     cancelled = true;
-    emit({ type: "pipeline.cancelled", reason: abortReason(signal) });
+    paused = false;
+    drainResumeWaiters(); // wake any parked workers so they observe cancellation
+    emit({ type: "pipeline.cancelled", reason });
     for (const item of items) {
       if (records.has(item.id)) continue;
       const s = states.get(item.id)!;
@@ -219,7 +257,53 @@ async function runPipeline(
       finalize(item);
     }
   };
+  const onAbort = () => cancelRun(abortReason(signal));
   signal?.addEventListener("abort", onAbort, { once: true });
+
+  // Inbound command channel. Phase 0 wires run.cancel (behaviourally identical to
+  // the AbortSignal path); other commands are acknowledged as rejected for now so
+  // the serializable contract exists end to end.
+  const dispatchCommand = (cmd: PipelineCommand) => {
+    switch (cmd.type) {
+      case "run.cancel":
+        cancelRun(cmd.reason || "cancelled by command");
+        break;
+      case "pipeline.pause":
+        if (!paused && !cancelled) {
+          paused = true;
+          emit({ type: "pipeline.paused", at: Date.now() });
+        }
+        break;
+      case "pipeline.resume":
+        if (paused) {
+          paused = false;
+          emit({ type: "pipeline.resumed", at: Date.now() });
+          drainResumeWaiters();
+        }
+        break;
+      case "item.cancel": {
+        const item = itemsById.get(cmd.itemId);
+        if (!item || records.has(cmd.itemId)) {
+          emit({ type: "command.rejected", command: cmd.type, itemId: cmd.itemId, reason: "unknown or already finalized item" });
+          break;
+        }
+        const s = states.get(cmd.itemId)!;
+        if (s.lastError === null) s.lastError = `skipped: ${cmd.reason}`;
+        emit({ type: "item.skipped", itemId: cmd.itemId, reason: cmd.reason });
+        finalize(item); // idempotent; cascades to DAG dependents like any non-pass
+        break;
+      }
+      default: {
+        // item.retry / item.reprioritize: acknowledged but not yet supported.
+        // Retry-after-finalize needs a latch +1 / record-eviction protocol, and
+        // the FIFO queue has no priority. Both are documented follow-ups.
+        const itemId = "itemId" in cmd ? cmd.itemId : null;
+        emit({ type: "command.rejected", command: cmd.type, itemId, reason: "not supported yet" });
+        break;
+      }
+    }
+  };
+  const offCommand = commands.onCommand(dispatchCommand);
 
   // Time one stage's processing and emit an item.metrics event.
   const timed = async <T>(
@@ -279,6 +363,8 @@ async function runPipeline(
     config.concurrency.designer,
     async (item, worker) => {
       if (cancelled) return;
+      await waitWhilePaused();
+      if (cancelled) return;
       emit({ type: "item.started", stage: "designer", itemId: item.id, worker });
       try {
         const out = await timed("designer", item.id, 1, () =>
@@ -305,6 +391,8 @@ async function runPipeline(
     config.concurrency.developer,
     async (job, worker) => {
       const { item } = job;
+      if (cancelled) return;
+      await waitWhilePaused();
       if (cancelled) return;
       emit({ type: "item.started", stage: "developer", itemId: item.id, worker });
       try {
@@ -366,6 +454,8 @@ async function runPipeline(
     config.concurrency.tester,
     async (job, worker) => {
       const { item, spec, code } = job;
+      if (cancelled) return;
+      await waitWhilePaused();
       if (cancelled) return;
       emit({ type: "item.started", stage: "tester", itemId: item.id, worker });
       try {
@@ -452,6 +542,7 @@ async function runPipeline(
 
   await latch.done;
   signal?.removeEventListener("abort", onAbort);
+  offCommand();
 
   // Every item is terminal: no worker is mid-flight and nothing will be pushed
   // again, so closing the queues just releases the idle pulls cleanly.
@@ -485,6 +576,350 @@ async function runPipeline(
     }
   }
 
+  emit({ type: "pipeline.done", records: finalRecords });
+  return finalRecords;
+}
+
+// --- Repo-editing mode -------------------------------------------------------
+//
+// A sibling of runPipeline that edits an EXISTING repository instead of
+// generating standalone modules. It reuses every primitive (AsyncQueue,
+// WorkerPool, CompletionLatch, the DAG finalize/cascade, the pause gate, the
+// command channel) but swaps the three stage handlers: designRepo -> RepoDesignSpec,
+// developRepo -> a multi-file Patch, and a tester that APPLIES the patch into a
+// per-item working copy and runs the repository's OWN test/lint/build command.
+// Per-item working copies give isolation, so items edit concurrently without
+// conflicting. Module mode (runPipeline) is left byte-for-byte unchanged.
+// (The control/DAG scaffolding is duplicated here to avoid touching the proven
+//  module path; DRY-ing it behind a shared core is a noted follow-up.)
+
+interface RepoDevJob {
+  item: WorkItem;
+  spec: RepoDesignSpec;
+  attempt: number;
+  feedback: string | null;
+}
+interface RepoTestJob {
+  item: WorkItem;
+  spec: RepoDesignSpec;
+  patch: Patch;
+}
+interface RepoItemState {
+  attempts: number;
+  passed: boolean;
+  patch: Patch | null;
+  lastError: string | null;
+}
+
+function splitCommand(commandLine: string): { command: string; args: string[] } {
+  const parts = commandLine.trim().split(/\s+/);
+  return { command: parts[0] ?? "", args: parts.slice(1) };
+}
+
+async function runRepoPipeline(
+  ctx: {
+    config: PipelineConfig;
+    agents: Agents;
+    workspaceDir: string;
+    bus: EventBus;
+    commands: CommandBus;
+  },
+  prompt: string,
+  opts: RunOptions = {},
+): Promise<FinalRecord[]> {
+  const { config, agents, workspaceDir, bus, commands } = ctx;
+  if (!config.repo.source) throw new Error("repo mode requires config.repo.source (REPO_SOURCE)");
+  if (!agents.designRepo || !agents.developRepo) {
+    throw new Error("repo mode requires agents.designRepo and agents.developRepo");
+  }
+  const designRepo = agents.designRepo;
+  const developRepo = agents.developRepo;
+
+  const runId = new Date().toISOString().replace(/[:.]/g, "-");
+  const runDir = path.join(workspaceDir, "runs", runId);
+
+  const designerQueue = new AsyncQueue<WorkItem>();
+  const developerQueue = new AsyncQueue<RepoDevJob>();
+  const testerQueue = new AsyncQueue<RepoTestJob>();
+
+  const states = new Map<string, RepoItemState>();
+  const records = new Map<string, FinalRecord>();
+  const repoContexts = new Map<string, RepoContext>();
+  const emit = (e: PipelineEvent) => bus.emit(e);
+
+  emit({ type: "pipeline.started", runId, prompt, startedAt: Date.now() });
+
+  const wbs = await agents.orchestrate(prompt, config.maxWbsItems);
+  const raws = wbs.items.slice(0, config.maxWbsItems);
+  const ids = raws.map((_, i) => `wi-${String(i + 1).padStart(3, "0")}`);
+  const keyToId = new Map<string, string>();
+  raws.forEach((raw, i) => {
+    if (raw.key) keyToId.set(raw.key, ids[i]!);
+  });
+  const items: WorkItem[] = raws.map((raw, i) => {
+    const self = ids[i]!;
+    const deps = Array.from(
+      new Set(
+        (raw.dependsOn ?? [])
+          .map((k) => keyToId.get(k))
+          .filter((id): id is string => id !== undefined && id !== self),
+      ),
+    );
+    return { id: self, title: raw.title, description: raw.description, acceptanceCriteria: raw.acceptanceCriteria, dependsOn: deps };
+  });
+  const itemsById = new Map(items.map((it) => [it.id, it]));
+  assertAcyclic(items);
+
+  const dependents = new Map<string, string[]>();
+  const unmet = new Map<string, number>();
+  for (const item of items) {
+    states.set(item.id, { attempts: 0, passed: false, patch: null, lastError: null });
+    unmet.set(item.id, item.dependsOn.length);
+    for (const dep of item.dependsOn) {
+      (dependents.get(dep) ?? dependents.set(dep, []).get(dep)!).push(item.id);
+    }
+  }
+  emit({ type: "wbs.created", items });
+  emit({ type: "repo.acquired", runId, root: runDir, ref: config.repo.ref });
+
+  const latch = new CompletionLatch(items.length);
+
+  const enqueueDesigner = (item: WorkItem) => {
+    designerQueue.push(item);
+    emit({ type: "item.enqueued", stage: "designer", itemId: item.id, queueDepth: designerQueue.depth });
+  };
+
+  let cancelled = false;
+  let paused = false;
+  const resumeWaiters: Array<() => void> = [];
+  const waitWhilePaused = (): Promise<void> =>
+    !paused || cancelled ? Promise.resolve() : new Promise<void>((r) => resumeWaiters.push(r));
+  const drainResumeWaiters = () => {
+    for (const r of resumeWaiters.splice(0)) r();
+  };
+
+  const finalize = (item: WorkItem) => {
+    if (records.has(item.id)) return;
+    const s = states.get(item.id)!;
+    const record: FinalRecord = {
+      workItem: item,
+      passed: s.passed,
+      attempts: s.attempts,
+      sourceCode: null,
+      testSource: null,
+      lastError: s.lastError,
+      patch: s.patch,
+    };
+    records.set(item.id, record);
+    emit({ type: "item.finalized", record });
+    latch.settleOne();
+    for (const depId of dependents.get(item.id) ?? []) {
+      if (records.has(depId)) continue;
+      const dependent = itemsById.get(depId)!;
+      if (s.passed) {
+        const remaining = unmet.get(depId)! - 1;
+        unmet.set(depId, remaining);
+        if (remaining === 0 && !cancelled) {
+          emit({ type: "item.unblocked", itemId: depId });
+          enqueueDesigner(dependent);
+        }
+      } else {
+        const ds = states.get(depId)!;
+        ds.lastError = `blocked: dependency ${item.id} did not pass`;
+        emit({ type: "item.failed", itemId: depId, stage: "designer", error: ds.lastError });
+        finalize(dependent);
+      }
+    }
+  };
+
+  const cancelRun = (reason: string) => {
+    if (cancelled) return;
+    cancelled = true;
+    paused = false;
+    drainResumeWaiters();
+    emit({ type: "pipeline.cancelled", reason });
+    for (const item of items) {
+      if (records.has(item.id)) continue;
+      const s = states.get(item.id)!;
+      if (s.lastError === null) s.lastError = "cancelled";
+      finalize(item);
+    }
+  };
+  const { signal } = opts;
+  const onAbort = () => cancelRun(abortReason(signal));
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  const dispatchCommand = (cmd: PipelineCommand) => {
+    switch (cmd.type) {
+      case "run.cancel":
+        cancelRun(cmd.reason || "cancelled by command");
+        break;
+      case "pipeline.pause":
+        if (!paused && !cancelled) {
+          paused = true;
+          emit({ type: "pipeline.paused", at: Date.now() });
+        }
+        break;
+      case "pipeline.resume":
+        if (paused) {
+          paused = false;
+          emit({ type: "pipeline.resumed", at: Date.now() });
+          drainResumeWaiters();
+        }
+        break;
+      case "item.cancel": {
+        const item = itemsById.get(cmd.itemId);
+        if (!item || records.has(cmd.itemId)) {
+          emit({ type: "command.rejected", command: cmd.type, itemId: cmd.itemId, reason: "unknown or already finalized item" });
+          break;
+        }
+        const s = states.get(cmd.itemId)!;
+        if (s.lastError === null) s.lastError = `skipped: ${cmd.reason}`;
+        emit({ type: "item.skipped", itemId: cmd.itemId, reason: cmd.reason });
+        finalize(item);
+        break;
+      }
+      default: {
+        const itemId = "itemId" in cmd ? cmd.itemId : null;
+        emit({ type: "command.rejected", command: cmd.type, itemId, reason: "not supported yet" });
+        break;
+      }
+    }
+  };
+  const offCommand = commands.onCommand(dispatchCommand);
+
+  const designerPool = new WorkerPool<WorkItem>(designerQueue, config.concurrency.designer, async (item, worker) => {
+    if (cancelled) return;
+    await waitWhilePaused();
+    if (cancelled) return;
+    emit({ type: "item.started", stage: "designer", itemId: item.id, worker });
+    try {
+      const root = await prepareWorkingCopy(config.repo.source!, path.join(runDir, "wt", item.id), {
+        ref: config.repo.ref,
+        timeoutMs: config.testTimeoutMs,
+      });
+      const repo = createRepoContext(root);
+      repoContexts.set(item.id, repo);
+      // Install/setup the working copy (e.g. `npm ci`) so the repo's own test
+      // command can run. Done once per per-item copy, before any patch.
+      if (config.repo.setupCommand) {
+        const { command, args } = splitCommand(config.repo.setupCommand);
+        const setup = await runCommand({ cwd: root, command, args, timeoutMs: config.testTimeoutMs, signal });
+        emit({ type: "item.command", itemId: item.id, command: config.repo.setupCommand, passed: setup.passed, detail: firstLines(setup.stderr || setup.stdout) });
+        if (cancelled) return;
+        if (!setup.passed) throw new Error(`repo setup failed: ${firstLines(setup.stderr || setup.stdout)}`);
+      }
+      const out = await designRepo({ item, repo });
+      if (cancelled) return;
+      const spec: RepoDesignSpec = { workItemId: item.id, ...out };
+      emit({ type: "item.completed", stage: "designer", itemId: item.id, worker });
+      developerQueue.push({ item, spec, attempt: 1, feedback: null });
+      emit({ type: "item.enqueued", stage: "developer", itemId: item.id, queueDepth: developerQueue.depth });
+    } catch (err) {
+      const s = states.get(item.id)!;
+      s.lastError = errorMessage(err);
+      emit({ type: "item.failed", itemId: item.id, stage: "designer", error: s.lastError });
+      finalize(item);
+    }
+  });
+
+  const developerPool = new WorkerPool<RepoDevJob>(developerQueue, config.concurrency.developer, async (job, worker) => {
+    const { item } = job;
+    if (cancelled) return;
+    await waitWhilePaused();
+    if (cancelled) return;
+    emit({ type: "item.started", stage: "developer", itemId: item.id, worker });
+    try {
+      const repo = repoContexts.get(item.id)!;
+      const out = await developRepo({ spec: job.spec, repo, feedback: job.feedback, attempt: job.attempt });
+      if (cancelled) return;
+      const patch: Patch = { workItemId: item.id, summary: out.summary, edits: out.edits, attempt: job.attempt, feedback: job.feedback };
+      const s = states.get(item.id)!;
+      s.attempts = job.attempt;
+      s.patch = patch;
+      emit({ type: "item.patch.proposed", itemId: item.id, attempt: job.attempt, files: patch.edits.map((e) => e.path), summary: patch.summary });
+      emit({ type: "item.completed", stage: "developer", itemId: item.id, worker });
+      testerQueue.push({ item, spec: job.spec, patch });
+      emit({ type: "item.enqueued", stage: "tester", itemId: item.id, queueDepth: testerQueue.depth });
+    } catch (err) {
+      const s = states.get(item.id)!;
+      s.lastError = errorMessage(err);
+      emit({ type: "item.failed", itemId: item.id, stage: "developer", error: s.lastError });
+      finalize(item);
+    }
+  });
+
+  const testerPool = new WorkerPool<RepoTestJob>(testerQueue, config.concurrency.tester, async (job, worker) => {
+    const { item, patch } = job;
+    if (cancelled) return;
+    await waitWhilePaused();
+    if (cancelled) return;
+    emit({ type: "item.started", stage: "tester", itemId: item.id, worker });
+    try {
+      const repo = repoContexts.get(item.id)!;
+      const s = states.get(item.id)!;
+      const files = await applyEdits(repo.root, patch.edits);
+      emit({ type: "item.patch.applied", itemId: item.id, attempt: patch.attempt, files });
+
+      const checks = [config.repo.testCommand, config.repo.lintCommand, config.repo.buildCommand].filter(
+        (c): c is string => Boolean(c),
+      );
+      let failure: string | null = null;
+      for (const commandLine of checks) {
+        const { command, args } = splitCommand(commandLine);
+        const run = await runCommand({ cwd: repo.root, command, args, timeoutMs: config.testTimeoutMs, signal });
+        emit({ type: "item.command", itemId: item.id, command: commandLine, passed: run.passed, detail: firstLines(run.stderr || run.stdout) });
+        if (cancelled) return;
+        if (!run.passed) {
+          failure = formatFeedback(run.stdout, run.stderr);
+          break;
+        }
+      }
+
+      if (failure === null) {
+        s.passed = true;
+        emit({ type: "item.completed", stage: "tester", itemId: item.id, worker });
+        finalize(item);
+        return;
+      }
+      s.lastError = failure;
+      if (patch.attempt <= config.maxReworkAttempts) {
+        const nextAttempt = patch.attempt + 1;
+        emit({ type: "item.reworked", itemId: item.id, attempt: nextAttempt, feedback: failure });
+        developerQueue.push({ item, spec: job.spec, attempt: nextAttempt, feedback: failure });
+        emit({ type: "item.enqueued", stage: "developer", itemId: item.id, queueDepth: developerQueue.depth });
+      } else {
+        emit({ type: "item.failed", itemId: item.id, stage: "tester", error: failure });
+        finalize(item);
+      }
+    } catch (err) {
+      const s = states.get(item.id)!;
+      s.lastError = errorMessage(err);
+      emit({ type: "item.failed", itemId: item.id, stage: "tester", error: s.lastError });
+      finalize(item);
+    }
+  });
+
+  designerPool.start();
+  developerPool.start();
+  testerPool.start();
+  if (signal?.aborted) onAbort();
+  if (!cancelled) {
+    for (const item of items) {
+      if (item.dependsOn.length === 0) enqueueDesigner(item);
+      else emit({ type: "item.blocked", itemId: item.id, dependsOn: item.dependsOn });
+    }
+  }
+
+  await latch.done;
+  signal?.removeEventListener("abort", onAbort);
+  offCommand();
+  designerQueue.close();
+  developerQueue.close();
+  testerQueue.close();
+  await Promise.all([designerPool.drained(), developerPool.drained(), testerPool.drained()]);
+
+  const finalRecords = items.map((it) => records.get(it.id)!);
   emit({ type: "pipeline.done", records: finalRecords });
   return finalRecords;
 }

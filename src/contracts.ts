@@ -55,6 +55,36 @@ export const TestResult = z.object({
 });
 export type TestResult = z.infer<typeof TestResult>;
 
+// --- Repo-editing mode contracts ---------------------------------------------
+// In "repo" mode a work item edits an EXISTING repository rather than generating
+// a standalone module. The developer produces a multi-file Patch; the tester runs
+// the repository's own test/lint/build command. These are parallel to (not a
+// replacement for) the module-mode contracts above, so module mode is untouched.
+
+export const FileEdit = z.object({
+  path: z.string(), // repo-relative POSIX path
+  kind: z.enum(["create", "modify", "delete"]),
+  contents: z.string().nullable(), // full new contents; null for delete
+});
+export type FileEdit = z.infer<typeof FileEdit>;
+
+export const Patch = z.object({
+  workItemId: z.string(),
+  summary: z.string(),
+  edits: z.array(FileEdit),
+  attempt: z.number().int().default(1),
+  feedback: z.string().nullable().default(null),
+});
+export type Patch = z.infer<typeof Patch>;
+
+export const RepoDesignSpec = z.object({
+  workItemId: z.string(),
+  intent: z.string(),
+  targetPaths: z.array(z.string()),
+  acceptanceNotes: z.array(z.string()),
+});
+export type RepoDesignSpec = z.infer<typeof RepoDesignSpec>;
+
 export const FinalRecord = z.object({
   workItem: WorkItem,
   passed: z.boolean(),
@@ -62,6 +92,8 @@ export const FinalRecord = z.object({
   sourceCode: z.string().nullable(),
   testSource: z.string().nullable(),
   lastError: z.string().nullable(),
+  /** Repo-mode result: the applied patch (null in module mode). */
+  patch: Patch.nullable().default(null),
 });
 export type FinalRecord = z.infer<typeof FinalRecord>;
 
@@ -102,6 +134,16 @@ export const TestOutput = z.object({
   testSource: z.string(),
 });
 export type TestOutput = z.infer<typeof TestOutput>;
+
+// Repo-mode LLM outputs (the engine fills in ids/attempt).
+export const RepoDesignOutput = RepoDesignSpec.omit({ workItemId: true });
+export type RepoDesignOutput = z.infer<typeof RepoDesignOutput>;
+
+export const PatchOutput = z.object({
+  summary: z.string(),
+  edits: z.array(FileEdit),
+});
+export type PatchOutput = z.infer<typeof PatchOutput>;
 
 export const ReviewOutput = z.object({
   approved: z.boolean(),

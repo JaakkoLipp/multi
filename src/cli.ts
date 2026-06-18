@@ -16,8 +16,10 @@ import { createStubAgents } from "./agents/stub.js";
 import type { Agents } from "./agents/types.js";
 import { loadConfig } from "./config.js";
 import type { FinalRecord } from "./contracts.js";
+import { CommandBus } from "./commands.js";
 import { createPipeline } from "./engine.js";
 import type { PipelineEvent } from "./events.js";
+import { attachInkRenderer } from "./renderers/ink/index.js";
 import { formatSummary, summarize } from "./metrics.js";
 import { attachLogRenderer } from "./renderers/log.js";
 import { attachRecorder, replay } from "./renderers/recorder.js";
@@ -34,9 +36,15 @@ interface Cli {
   port: number;
   speed: number;
   json: boolean;
+  tui: boolean;
   gates: string | null;
   review: boolean;
   pkg: boolean;
+  repoSource: string | null;
+  repoTestCmd: string | null;
+  issue: string | null;
+  track: boolean;
+  pr: boolean;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -45,6 +53,7 @@ function parseArgs(argv: string[]): Cli {
   let stub = false;
   let serve = false;
   let json = false;
+  let tui = false;
   let record: string | null = null;
   let replayFile: string | null = null;
   let port = 7717;
@@ -52,6 +61,11 @@ function parseArgs(argv: string[]): Cli {
   let gates: string | null = null;
   let review = false;
   let pkg = false;
+  let repoSource: string | null = null;
+  let repoTestCmd: string | null = null;
+  let issue: string | null = null;
+  let track = false;
+  let pr = false;
 
   const valueOf = (arg: string, i: number): { value: string | null; next: number } => {
     const eq = arg.indexOf("=");
@@ -72,6 +86,7 @@ function parseArgs(argv: string[]): Cli {
       case "--no-ui": noUi = true; break;
       case "--stub": stub = true; break;
       case "--serve": serve = true; break;
+      case "--tui": tui = true; break;
       case "--review": review = true; break;
       case "--package": pkg = true; break;
       case "--json": json = true; noUi = true; break;
@@ -105,13 +120,34 @@ function parseArgs(argv: string[]): Cli {
         i = next;
         break;
       }
+      case "--repo": {
+        const { value, next } = valueOf(arg, i);
+        repoSource = value;
+        i = next;
+        break;
+      }
+      case "--test-cmd": {
+        const { value, next } = valueOf(arg, i);
+        repoTestCmd = value;
+        i = next;
+        break;
+      }
+      case "--issue": {
+        const { value, next } = valueOf(arg, i);
+        issue = value;
+        i = next;
+        break;
+      }
+      case "--track": track = true; break;
+      case "--pr": pr = true; break;
       default: break;
     }
   }
 
   return {
     prompt: positionals.join(" ").trim(),
-    noUi, stub, serve, record, replayFile, port, speed, json, gates, review, pkg,
+    noUi, stub, serve, record, replayFile, port, speed, json, tui, gates, review, pkg,
+    repoSource, repoTestCmd, issue, track, pr,
   };
 }
 
@@ -133,10 +169,16 @@ function usage(): never {
       `  --no-ui         plain event log instead of the live view (proves headlessness)\n` +
       `  --record [file] persist the event stream as NDJSON (default workspace/events.ndjson)\n` +
       `  --serve         broadcast the stream over SSE; open the printed URL to watch in a browser\n` +
+      `  --tui           interactive Ink terminal UI (pause/skip/cancel via keys; needs a TTY)\n` +
       `  --json          machine-readable {summary, records} to stdout (implies --no-ui)\n` +
       `  --gates [list]  quality gates after tests (default typecheck,lint,coverage)\n` +
       `  --review        critic reviews code before testing (rejections rework)\n` +
       `  --package       assemble passing modules into a library + integration test\n` +
+      `  --repo <src>    repo mode: edit an existing repo (git URL or local path)\n` +
+      `  --test-cmd <c>  the repo's own test command (repo mode; default npm test)\n` +
+      `  --issue o/r#n   load a GitHub issue as the task (repo mode; needs a GitHub App)\n` +
+      `  --track         post + live-update progress on the issue (a dev-team bot)\n` +
+      `  --pr            open a pull request from the run (links the issue)\n` +
       `  --replay <file> re-draw a recorded run with NO engine (proves the renderer seam)`,
   );
   process.exit(2);
@@ -157,7 +199,7 @@ async function main(): Promise<void> {
     await runReplay(cli);
     return;
   }
-  if (!cli.prompt) usage();
+  if (!cli.prompt && !cli.issue) usage();
 
   loadDotEnv();
   const config = loadConfig(process.env);
@@ -169,7 +211,39 @@ async function main(): Promise<void> {
   }
   if (cli.review) config.review.enabled = true;
   if (cli.pkg) config.packaging.enabled = true;
+  if (cli.repoSource) {
+    config.mode = "repo";
+    config.repo.source = cli.repoSource;
+  }
+  if (cli.repoTestCmd) config.repo.testCommand = cli.repoTestCmd;
   const workspaceDir = path.resolve("workspace");
+
+  // --- GitHub (dev-team ownership): issue -> task, live tracking, PR -----------
+  // Lazily imported so `octokit` only loads when a GitHub feature is requested.
+  let prompt = cli.prompt;
+  let gh: import("./github/client.js").GitHubClient | null = null;
+  let issueRef: import("./github/client.js").IssueRef | null = null;
+  if (cli.issue || cli.track || cli.pr) {
+    const { createGitHubAppClient } = await import("./github/auth.js");
+    gh = await createGitHubAppClient(config.github); // throws with guidance if unconfigured
+  }
+  if (cli.issue) {
+    const { parseIssueRef, issueToPrompt } = await import("./github/source.js");
+    issueRef = parseIssueRef(cli.issue);
+    const issueData = await gh!.getIssue(issueRef);
+    prompt = issueToPrompt(issueData);
+    config.mode = "repo";
+    config.github.owner = issueRef.owner;
+    config.github.repo = issueRef.repo;
+    // Clone the issue's repo with a short-lived installation token.
+    const token = await gh!.installationToken();
+    config.repo.source = `https://x-access-token:${token}@github.com/${issueRef.owner}/${issueRef.repo}.git`;
+    console.log(pc.cyan(`Loaded ${cli.issue}: ${issueData.title}`));
+  }
+  if (cli.track && !issueRef) {
+    console.error(pc.red("--track requires --issue (the issue to post progress on)."));
+    process.exit(2);
+  }
 
   let agents: Agents;
   if (cli.stub) {
@@ -180,19 +254,39 @@ async function main(): Promise<void> {
     agents = createRealAgents(config);
   }
 
-  const pipeline = createPipeline({ config, agents, workspaceDir });
+  // The interactive TUI needs an inbound command channel wired BEFORE run()
+  // starts so its keystrokes can pause/skip/cancel. Other modes let the engine
+  // own its command bus.
+  const commandBus = cli.tui && !cli.json ? new CommandBus() : null;
+  const pipeline = createPipeline(
+    commandBus ? { config, agents, workspaceDir, commands: commandBus } : { config, agents, workspaceDir },
+  );
 
   // Every renderer is a plain subscriber. Attach as many as requested; the
   // engine has no idea any of them exist.
   const detachers: Array<() => void> = [];
   if (!cli.json) {
     // --json keeps stdout clean for the machine-readable payload, so no
-    // human-facing renderer is attached in that mode.
-    detachers.push(
-      cli.noUi ? attachLogRenderer(pipeline.on) : attachTerminalRenderer(pipeline.on),
-    );
+    // human-facing renderer is attached in that mode. --tui replaces the
+    // read-only terminal/log renderers with the interactive Ink view.
+    if (commandBus) {
+      detachers.push(attachInkRenderer(pipeline.on, (c) => commandBus.send(c)));
+    } else {
+      detachers.push(
+        cli.noUi ? attachLogRenderer(pipeline.on) : attachTerminalRenderer(pipeline.on),
+      );
+    }
   }
   if (cli.record) detachers.push(attachRecorder(pipeline.on, cli.record));
+
+  // Live progress tracking on the issue — a pure subscriber, like any renderer.
+  let tracker: import("./github/tracker.js").TrackerHandle | null = null;
+  if (cli.track && gh && issueRef) {
+    const { attachTracker } = await import("./github/tracker.js");
+    tracker = attachTracker(pipeline.on, gh, issueRef);
+    detachers.push(() => tracker!.detach());
+    console.log(pc.cyan(`Tracking progress on ${issueRef.owner}/${issueRef.repo}#${issueRef.number}`));
+  }
 
   // A collector so we can compute the run summary purely from the stream.
   const events: PipelineEvent[] = [];
@@ -209,9 +303,10 @@ async function main(): Promise<void> {
 
   let records: FinalRecord[];
   try {
-    records = await pipeline.run(cli.prompt, { signal: controller.signal });
+    records = await pipeline.run(prompt, { signal: controller.signal });
   } finally {
     process.removeListener("SIGINT", onSigint);
+    if (tracker) await tracker.idle(); // flush the final tracking comment
     for (const d of detachers) d();
   }
 
@@ -228,6 +323,44 @@ async function main(): Promise<void> {
     console.log(formatSummary(summary));
     console.log(pc.dim(`\nRun summary: ${summaryPath}`));
     if (cli.record) console.log(pc.dim(`Recorded event log: ${cli.record}`));
+  }
+
+  // Open a pull request from the run (repo mode + GitHub configured).
+  if (cli.pr && gh && config.github.owner && config.github.repo && records.some((r) => r.passed)) {
+    try {
+      const { preparePrBranch } = await import("./github/git.js");
+      const { openPullRequest } = await import("./github/pr.js");
+      const token = await gh.installationToken();
+      const branch = `agent/${issueRef ? `issue-${issueRef.number}` : "run"}-${Date.now()}`;
+      const prep = await preparePrBranch({
+        owner: config.github.owner,
+        repo: config.github.repo,
+        token,
+        baseRef: config.repo.ref,
+        branch,
+        workdir: path.join(workspaceDir, "pr"),
+        records,
+        commitMessage: `Agent pipeline: ${(issueRef ? `#${issueRef.number} ` : "") + prompt}`.slice(0, 72),
+        timeoutMs: Math.max(config.testTimeoutMs, 120_000),
+      });
+      if (prep.pushed) {
+        const pull = await openPullRequest(gh, {
+          owner: config.github.owner,
+          repo: config.github.repo,
+          title: issueRef ? `Resolve #${issueRef.number}` : "Agent pipeline changes",
+          head: branch,
+          base: config.repo.ref,
+          summary,
+          records,
+          issueNumber: issueRef?.number ?? null,
+        });
+        console.log(pc.green(`\nOpened pull request: ${pull.htmlUrl}`));
+      } else {
+        console.error(pc.red("\nBranch push failed; PR not opened."));
+      }
+    } catch (err) {
+      console.error(pc.red(`\nPR step failed: ${(err as Error).message}`));
+    }
   }
 
   if (sse) {

@@ -8,6 +8,8 @@ import type {
   DesignInput,
   DependencyContext,
   DevelopInput,
+  RepoDesignInput,
+  RepoDevelopInput,
   ReviewInput,
   WriteTestsInput,
 } from "./types.js";
@@ -121,6 +123,60 @@ export function renderReviewerPrompt(input: ReviewInput): string {
     input.sourceCode,
     "```",
   ].join("\n");
+}
+
+// --- Repo mode ---------------------------------------------------------------
+
+export const REPO_DESIGNER_INSTRUCTIONS = `You are a software designer working in an EXISTING repository.
+Given a work item and the repository's file list, decide the smallest change that satisfies it.
+Produce:
+- intent: what to change and why, in one short paragraph.
+- targetPaths: the repo-relative files the developer should edit (or create).
+- acceptanceNotes: concrete, checkable conditions for "done".
+Do not propose sweeping refactors; keep the change focused.`;
+
+export const REPO_DEVELOPER_INSTRUCTIONS = `You are a developer editing an EXISTING repository. Produce a multi-file patch.
+Rules:
+- Output a summary and an edits[] array; each edit is { path, kind: "create"|"modify"|"delete", contents }.
+- For create/modify, contents MUST be the FULL new file contents (not a diff).
+- Keep the change minimal and focused on the design intent.
+- If failing test/lint/build output is provided, fix exactly those failures without changing unrelated behavior.`;
+
+export async function renderRepoDesignerPrompt(input: RepoDesignInput): Promise<string> {
+  const files = await input.repo.listFiles();
+  return [
+    `Work item ${input.item.id}: ${input.item.title}`,
+    `Description: ${input.item.description}`,
+    `Acceptance criteria:`,
+    ...input.item.acceptanceCriteria.map((c) => `- ${c}`),
+    ``,
+    `Repository files (truncated):`,
+    ...files.slice(0, 200).map((f) => `- ${f}`),
+  ].join("\n");
+}
+
+export async function renderRepoDeveloperPrompt(input: RepoDevelopInput): Promise<string> {
+  const lines = [`Intent: ${input.spec.intent}`, ``, `Target files (current contents):`];
+  for (const p of input.spec.targetPaths) {
+    let content: string;
+    try {
+      content = await input.repo.read(p);
+    } catch {
+      content = "(file does not exist yet — create it)";
+    }
+    lines.push(`--- ${p} ---`, "```", content, "```");
+  }
+  lines.push(``, `Acceptance notes:`, ...input.spec.acceptanceNotes.map((n) => `- ${n}`));
+  if (input.feedback) {
+    lines.push(
+      ``,
+      `This is rework attempt ${input.attempt}. The repository's own checks FAILED:`,
+      input.feedback,
+      ``,
+      `Fix the failing checks. Return the FULL updated contents for each edited file.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 export function renderTesterPrompt(input: WriteTestsInput): string {

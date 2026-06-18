@@ -8,11 +8,15 @@ import type {
   CodeOutput,
   DesignOutput,
   DesignSpec,
+  PatchOutput,
+  RepoDesignOutput,
+  RepoDesignSpec,
   ReviewOutput,
   TestOutput,
   WbsOutput,
   WorkItem,
 } from "../contracts.js";
+import type { RepoContext } from "../repo.js";
 
 /** Design specs of the items this one depends on (already designed & passed),
  * provided as building-block context. Empty for DAG roots. */
@@ -47,11 +51,28 @@ export interface ReviewInput {
   attempt: number;
 }
 
+export interface RepoDesignInput {
+  item: WorkItem;
+  repo: RepoContext;
+}
+
+export interface RepoDevelopInput {
+  spec: RepoDesignSpec;
+  repo: RepoContext;
+  /** Present only on rework: the repo's real failing test/lint/build output. */
+  feedback: string | null;
+  attempt: number;
+}
+
 export interface Agents {
   orchestrate(prompt: string, maxItems: number): Promise<WbsOutput>;
+  // module mode
   design(input: DesignInput): Promise<DesignOutput>;
   develop(input: DevelopInput): Promise<CodeOutput>;
   writeTests(input: WriteTestsInput): Promise<TestOutput>;
   /** Optional critic pass (used only when the review loop is enabled). */
   review(input: ReviewInput): Promise<ReviewOutput>;
+  // repo mode (required only when config.mode === "repo")
+  designRepo?(input: RepoDesignInput): Promise<RepoDesignOutput>;
+  developRepo?(input: RepoDevelopInput): Promise<PatchOutput>;
 }

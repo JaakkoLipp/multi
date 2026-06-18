@@ -10,6 +10,8 @@ import type { PipelineConfig } from "../config.js";
 import { makeDesigner } from "./designer.js";
 import { makeDeveloper } from "./developer.js";
 import { makeOrchestrator } from "./orchestrator.js";
+import { makeRepoDesigner } from "./repo-designer.js";
+import { makeRepoDeveloper } from "./repo-developer.js";
 import { makeReviewer } from "./reviewer.js";
 import { makeTester } from "./tester.js";
 import type { Agents } from "./types.js";
@@ -26,6 +28,8 @@ export function createRealAgents(config: PipelineConfig): Agents {
   const develop = makeDeveloper(model(config.models.developer));
   const writeTests = makeTester(model(config.models.tester));
   const review = makeReviewer(model(config.models.reviewer));
+  const designRepo = makeRepoDesigner(model(config.models.designer));
+  const developRepo = makeRepoDeveloper(model(config.models.developer));
 
-  return { orchestrate, design, develop, writeTests, review };
+  return { orchestrate, design, develop, writeTests, review, designRepo, developRepo };
 }

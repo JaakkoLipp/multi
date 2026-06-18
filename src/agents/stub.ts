@@ -15,6 +15,8 @@
 import type {
   CodeOutput,
   DesignOutput,
+  PatchOutput,
+  RepoDesignOutput,
   ReviewOutput,
   TestOutput,
   WbsOutput,
@@ -25,6 +27,8 @@ import type {
   Agents,
   DesignInput,
   DevelopInput,
+  RepoDesignInput,
+  RepoDevelopInput,
   ReviewInput,
   WriteTestsInput,
 } from "./types.js";
@@ -197,6 +201,29 @@ ${f.tests}
         input.sourceCode.includes(`export function ${input.spec.functionName}`) &&
         !input.sourceCode.includes("TODO");
       return { approved, notes: approved ? "" : "Implement the function fully (no TODOs)." };
+    },
+
+    // --- Repo mode (drives the test/fixtures/repo "add" bug) ----------------
+    async designRepo(_input: RepoDesignInput): Promise<RepoDesignOutput> {
+      return {
+        intent: "Fix add() so it returns the sum of its arguments.",
+        targetPaths: ["src.mjs"],
+        acceptanceNotes: ["add(2, 3) === 5"],
+      };
+    },
+
+    async developRepo(input: RepoDevelopInput): Promise<PatchOutput> {
+      const target = input.spec.targetPaths[0] ?? "src.mjs";
+      // First attempt is still wrong (multiplies) to exercise the rework loop
+      // against the repo's REAL failing test output; rework fixes it.
+      const wrongFirst = input.attempt === 1 && input.feedback === null;
+      const body = wrongFirst ? "a * b" : "a + b";
+      return {
+        summary: `Fix ${target} to return the sum`,
+        edits: [
+          { path: target, kind: "modify", contents: `export function add(a, b) {\n  return ${body};\n}\n` },
+        ],
+      };
     },
   };
 }

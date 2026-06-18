@@ -32,8 +32,17 @@ export type PipelineEvent =
   | { type: "item.failed"; itemId: string; stage: Stage; error: string }
   | { type: "item.metrics"; stage: Stage; itemId: string; attempt: number; durationMs: number }
   | { type: "item.finalized"; record: FinalRecord }
+  | { type: "pipeline.paused"; at: number }
+  | { type: "pipeline.resumed"; at: number }
+  | { type: "item.skipped"; itemId: string; reason: string }
+  | { type: "item.retry.accepted"; itemId: string; attempt: number }
+  | { type: "command.rejected"; command: string; itemId: string | null; reason: string }
   | { type: "pipeline.cancelled"; reason: string }
   | { type: "pipeline.packaged"; dir: string; modules: string[]; integrationPassed: boolean }
+  | { type: "repo.acquired"; runId: string; root: string; ref: string }
+  | { type: "item.patch.proposed"; itemId: string; attempt: number; files: string[]; summary: string }
+  | { type: "item.patch.applied"; itemId: string; attempt: number; files: string[] }
+  | { type: "item.command"; itemId: string; command: string; passed: boolean; detail: string }
   | { type: "pipeline.done"; records: FinalRecord[] };
 
 export type PipelineEventType = PipelineEvent["type"];
