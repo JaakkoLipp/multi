@@ -794,7 +794,10 @@ async function runRepoPipeline(
     if (cancelled) return;
     emit({ type: "item.started", stage: "designer", itemId: item.id, worker });
     try {
-      const root = await prepareWorkingCopy(config.repo.source!, path.join(runDir, "wt", item.id));
+      const root = await prepareWorkingCopy(config.repo.source!, path.join(runDir, "wt", item.id), {
+        ref: config.repo.ref,
+        timeoutMs: config.testTimeoutMs,
+      });
       const repo = createRepoContext(root);
       repoContexts.set(item.id, repo);
       const out = await designRepo({ item, repo });

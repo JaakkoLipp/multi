@@ -56,6 +56,16 @@ const ConfigSchema = z.object({
     enabled: z.boolean(),
     name: z.string().min(1),
   }),
+  github: z.object({
+    // GitHub App (bot identity) credentials. The app authenticates as an
+    // installation: a short-lived token minted from appId + private key, scoped
+    // to the installation. Never a hard-coded or harness credential.
+    appId: z.string().nullable(),
+    privateKey: z.string().nullable(),
+    installationId: z.number().int().nullable(),
+    owner: z.string().nullable(),
+    repo: z.string().nullable(),
+  }),
   gates: z.object({
     // Quality gates run after unit tests pass; a failing gate routes the item
     // back to the developer as feedback (bounded by the rework cap). Default off
@@ -75,6 +85,25 @@ export type RawEnv = Record<string, string | undefined>;
 function boolFromEnv(value: string | undefined, def: boolean): boolean {
   if (value === undefined || value === "") return def;
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+/**
+ * Normalize a PEM private key supplied via env. Supports a literal multi-line
+ * PEM, a single line with escaped "\n", or a base64-encoded PEM (common when a
+ * key is stuffed into a single env var/secret).
+ */
+function normalizePem(value: string | undefined): string | null {
+  if (!value || value.trim() === "") return null;
+  if (value.includes("BEGIN") && value.includes("PRIVATE KEY")) {
+    return value.includes("\\n") ? value.replace(/\\n/g, "\n") : value;
+  }
+  try {
+    const decoded = Buffer.from(value, "base64").toString("utf8");
+    if (decoded.includes("BEGIN") && decoded.includes("PRIVATE KEY")) return decoded;
+  } catch {
+    /* fall through */
+  }
+  return value.replace(/\\n/g, "\n");
 }
 
 export function loadConfig(env: RawEnv = process.env): PipelineConfig {
@@ -110,6 +139,16 @@ export function loadConfig(env: RawEnv = process.env): PipelineConfig {
     packaging: {
       enabled: boolFromEnv(env.PACKAGE_ENABLED, false),
       name: env.PACKAGE_NAME ?? "generated-utils",
+    },
+    github: {
+      appId: env.GITHUB_APP_ID ?? null,
+      privateKey: normalizePem(env.GITHUB_PRIVATE_KEY),
+      installationId:
+        env.GITHUB_INSTALLATION_ID && env.GITHUB_INSTALLATION_ID !== ""
+          ? Number(env.GITHUB_INSTALLATION_ID)
+          : null,
+      owner: env.GITHUB_OWNER ?? null,
+      repo: env.GITHUB_REPO ?? null,
     },
     gates: {
       typecheck: boolFromEnv(env.GATE_TYPECHECK, false),

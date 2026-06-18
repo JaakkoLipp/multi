@@ -171,6 +171,29 @@ design and is fully tested against deterministic stubs.
   scheduling-level dependencies. Emitted as pipeline.packaged before
   pipeline.done; off by default (`--package`).
 
+## GitHub dev-team ownership (Phase 5)
+
+- **Auth = GitHub App installation (bot identity).** Chosen over a PAT so the app
+  acts as a scoped bot that "owns" the repo, posting as the App with only the
+  installation's permissions, using short-lived installation tokens (appId +
+  private key). Verified up front: no token exists in the sandbox; `api.github.com`
+  is reachable but unauthenticated requests are rate-limited (60/hr, exhausted) so
+  auth is mandatory; git is brokered through a local proxy, so live push/PR is
+  real-environment only. The app uses its OWN Octokit client — never the Claude
+  Code harness MCP tools.
+- **Narrow `GitHubClient` interface.** Everything in `src/github/*` depends on a
+  small interface, not Octokit, so the integration is unit-tested with a fake
+  client and no network (`getIssue`/`createComment`/`updateComment`/`createPull`/
+  `getPullFeedback`/`installationToken`). `auth.ts` is the only file that touches
+  the real Octokit.
+- **Tracker is a pure subscriber.** Live progress posts one issue comment on
+  `wbs.created` and live-edits it from the event stream — exactly the renderer
+  contract, so the engine is untouched. Writes are coalesced (≤1 trailing update).
+- **Seams left clean.** `--issue` (issue→prompt→repo mode), `--track`, `--pr`
+  (branch via the App token + `pulls.create`). `getPullFeedback` aggregates review
+  comments + failing checks as the CI/review→rework seam; the poll/webhook loop is
+  a documented follow-up.
+
 ## Out of scope (per §11)
 
 No VS Code extension/webview, persistence, distributed queues, auth, HITL, or

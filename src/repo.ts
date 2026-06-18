@@ -16,6 +16,7 @@
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FileEdit } from "./contracts.js";
+import { runCommand } from "./sandbox.js";
 
 export interface SearchHit {
   path: string;
@@ -38,12 +39,34 @@ const IGNORED = new Set([".git", "node_modules", "dist", "build", "coverage", ".
 const MAX_FILE_BYTES = 512 * 1024;
 
 /**
- * Materialize a working copy of `source` (a local path, in the MVP) at `dest`.
- * Returns the working-copy root.
+ * Materialize a working copy of `source` at `dest` and return its root.
+ *
+ * A remote URL (http(s)/git@/ssh) is `git clone`d at the given ref; a local path
+ * is copied (used by the offline test fixture). For private repos the caller
+ * embeds an installation token in the URL.
  */
-export async function prepareWorkingCopy(source: string, dest: string): Promise<string> {
+export async function prepareWorkingCopy(
+  source: string,
+  dest: string,
+  opts: { ref?: string; timeoutMs?: number } = {},
+): Promise<string> {
   await rm(dest, { recursive: true, force: true });
   await mkdir(path.dirname(dest), { recursive: true });
+
+  if (/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(source)) {
+    const args = ["clone", "--depth", "1"];
+    if (opts.ref) args.push("--branch", opts.ref);
+    args.push(source, dest);
+    const r = await runCommand({
+      cwd: path.dirname(dest),
+      command: "git",
+      args,
+      timeoutMs: opts.timeoutMs ?? 120_000,
+    });
+    if (!r.passed) throw new Error(`git clone failed: ${r.stderr || r.stdout}`);
+    return dest;
+  }
+
   await cp(source, dest, {
     recursive: true,
     filter: (src) => !src.split(path.sep).some((seg) => IGNORED.has(seg)),
