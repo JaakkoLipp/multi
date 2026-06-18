@@ -16,8 +16,10 @@ import { createStubAgents } from "./agents/stub.js";
 import type { Agents } from "./agents/types.js";
 import { loadConfig } from "./config.js";
 import type { FinalRecord } from "./contracts.js";
+import { CommandBus } from "./commands.js";
 import { createPipeline } from "./engine.js";
 import type { PipelineEvent } from "./events.js";
+import { attachInkRenderer } from "./renderers/ink/index.js";
 import { formatSummary, summarize } from "./metrics.js";
 import { attachLogRenderer } from "./renderers/log.js";
 import { attachRecorder, replay } from "./renderers/recorder.js";
@@ -34,6 +36,7 @@ interface Cli {
   port: number;
   speed: number;
   json: boolean;
+  tui: boolean;
   gates: string | null;
   review: boolean;
   pkg: boolean;
@@ -50,6 +53,7 @@ function parseArgs(argv: string[]): Cli {
   let stub = false;
   let serve = false;
   let json = false;
+  let tui = false;
   let record: string | null = null;
   let replayFile: string | null = null;
   let port = 7717;
@@ -82,6 +86,7 @@ function parseArgs(argv: string[]): Cli {
       case "--no-ui": noUi = true; break;
       case "--stub": stub = true; break;
       case "--serve": serve = true; break;
+      case "--tui": tui = true; break;
       case "--review": review = true; break;
       case "--package": pkg = true; break;
       case "--json": json = true; noUi = true; break;
@@ -141,7 +146,7 @@ function parseArgs(argv: string[]): Cli {
 
   return {
     prompt: positionals.join(" ").trim(),
-    noUi, stub, serve, record, replayFile, port, speed, json, gates, review, pkg,
+    noUi, stub, serve, record, replayFile, port, speed, json, tui, gates, review, pkg,
     repoSource, repoTestCmd, issue, track, pr,
   };
 }
@@ -164,6 +169,7 @@ function usage(): never {
       `  --no-ui         plain event log instead of the live view (proves headlessness)\n` +
       `  --record [file] persist the event stream as NDJSON (default workspace/events.ndjson)\n` +
       `  --serve         broadcast the stream over SSE; open the printed URL to watch in a browser\n` +
+      `  --tui           interactive Ink terminal UI (pause/skip/cancel via keys; needs a TTY)\n` +
       `  --json          machine-readable {summary, records} to stdout (implies --no-ui)\n` +
       `  --gates [list]  quality gates after tests (default typecheck,lint,coverage)\n` +
       `  --review        critic reviews code before testing (rejections rework)\n` +
@@ -248,17 +254,28 @@ async function main(): Promise<void> {
     agents = createRealAgents(config);
   }
 
-  const pipeline = createPipeline({ config, agents, workspaceDir });
+  // The interactive TUI needs an inbound command channel wired BEFORE run()
+  // starts so its keystrokes can pause/skip/cancel. Other modes let the engine
+  // own its command bus.
+  const commandBus = cli.tui && !cli.json ? new CommandBus() : null;
+  const pipeline = createPipeline(
+    commandBus ? { config, agents, workspaceDir, commands: commandBus } : { config, agents, workspaceDir },
+  );
 
   // Every renderer is a plain subscriber. Attach as many as requested; the
   // engine has no idea any of them exist.
   const detachers: Array<() => void> = [];
   if (!cli.json) {
     // --json keeps stdout clean for the machine-readable payload, so no
-    // human-facing renderer is attached in that mode.
-    detachers.push(
-      cli.noUi ? attachLogRenderer(pipeline.on) : attachTerminalRenderer(pipeline.on),
-    );
+    // human-facing renderer is attached in that mode. --tui replaces the
+    // read-only terminal/log renderers with the interactive Ink view.
+    if (commandBus) {
+      detachers.push(attachInkRenderer(pipeline.on, (c) => commandBus.send(c)));
+    } else {
+      detachers.push(
+        cli.noUi ? attachLogRenderer(pipeline.on) : attachTerminalRenderer(pipeline.on),
+      );
+    }
   }
   if (cli.record) detachers.push(attachRecorder(pipeline.on, cli.record));
 
